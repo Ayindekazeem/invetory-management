@@ -184,3 +184,18 @@ class CustomUserForm(TailwindFormMixin, forms.ModelForm):
         if commit:
             user.save()
         return user
+
+
+class BulkUploadForm(TailwindFormMixin, forms.Form):
+    file = forms.FileField(
+        label="Select File",
+    )
+
+    def clean_file(self):
+        uploaded_file = self.cleaned_data.get('file')
+        if uploaded_file:
+            name = uploaded_file.name.lower()
+            if not (name.endswith('.csv') or name.endswith('.xlsx')):
+                raise forms.ValidationError("Unsupported file extension. Only .csv and .xlsx files are allowed.")
+        return uploaded_file
+

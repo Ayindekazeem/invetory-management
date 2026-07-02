@@ -185,3 +185,47 @@ class InventorySystemTestCase(TestCase):
         response = self.client.get('/users/')
         self.assertEqual(response.status_code, 200)
 
+    def test_download_drug_template(self):
+        """Test downloading the CSV drug upload template."""
+        self.client.force_login(self.user)
+        response = self.client.get('/drugs/template/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('drug_name,category,unit', response.content.decode('utf-8'))
+
+    def test_bulk_upload_drugs_csv_valid(self):
+        """Test bulk upload of valid CSV drug records."""
+        self.client.force_login(self.user)
+        
+        csv_content = (
+            "drug_name,category,unit,reorder_level,min_stock,max_stock,description\n"
+            "Paracetamol 500mg,tablet,pack,100,50,1000,Pain relief\n"
+            "Cough Syrup,syrup,bottle,30,10,200,Soothing formula\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("drugs.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post('/drugs/bulk-upload/', {'file': mock_file}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Drug.objects.filter(drug_name="Paracetamol 500mg").count(), 1)
+        self.assertEqual(Drug.objects.filter(drug_name="Cough Syrup").count(), 1)
+
+    def test_bulk_upload_drugs_csv_invalid(self):
+        """Test bulk upload of invalid CSV drug records fails validation."""
+        self.client.force_login(self.user)
+        
+        # Invalid: category is invalid and min_stock is not an integer
+        csv_content = (
+            "drug_name,category,unit,reorder_level,min_stock,max_stock,description\n"
+            "Invalid Drug,INVALID_CAT,Tablet,100,not-an-int,1000,Pain relief\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("drugs.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post('/drugs/bulk-upload/', {'file': mock_file})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('errors', response.context)
+        self.assertTrue(len(response.context['errors']) > 0)
+        self.assertEqual(Drug.objects.filter(drug_name="Invalid Drug").count(), 0)
+
+
