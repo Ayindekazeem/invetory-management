@@ -13,6 +13,8 @@ urlpatterns = [
     # Drugs
     path('drugs/', views.drug_list, name='drug_list'),
     path('drugs/add/', views.drug_create, name='drug_create'),
+    path('drugs/bulk-upload/', views.bulk_upload_drugs, name='bulk_upload_drugs'),
+    path('drugs/template/', views.download_drug_template, name='download_drug_template'),
     path('drugs/<int:pk>/', views.drug_detail, name='drug_detail'),
     path('drugs/<int:pk>/edit/', views.drug_edit, name='drug_edit'),
     path('drugs/<int:pk>/delete/', views.drug_delete, name='drug_delete'),

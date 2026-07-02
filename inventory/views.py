@@ -13,8 +13,12 @@ import datetime
 from .models import Drug, Batch, Supplier, StockTransaction, Alert, CustomUser
 from .forms import (
     CustomAuthenticationForm, DrugForm, SupplierForm, BatchForm, 
-    StockInForm, StockOutForm, CustomUserForm
+    StockInForm, StockOutForm, CustomUserForm, BulkUploadForm
 )
+from django.db import transaction
+import openpyxl
+import io
+
 from .utils import check_and_create_alerts, process_fefo_stock_out
 
 def login_view(request):
@@ -582,4 +586,188 @@ def user_delete(request, pk):
         messages.success(request, f"User '{user.username}' deleted successfully.")
         return redirect('user_list')
     return render(request, 'inventory/drugs/delete_confirm.html', {'object': user, 'type': 'User'})
+
+
+@login_required
+def download_drug_template(request):
+    """Generates a downloadable CSV template for bulk drug uploads."""
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="drug_upload_template.csv"'
+    
+    writer = csv.writer(response)
+    # Headers
+    writer.writerow(['drug_name', 'category', 'unit', 'reorder_level', 'min_stock', 'max_stock', 'description'])
+    # Sample rows
+    writer.writerow(['Paracetamol 500mg', 'TABLET', 'Tablet', '100', '50', '1000', 'For pain relief and fever reduction.'])
+    writer.writerow(['Amoxicillin 250mg', 'CAPSULE', 'Capsule', '50', '20', '500', 'Broad-spectrum antibiotic.'])
+    writer.writerow(['Cough Syrup', 'SYRUP', 'Bottle', '30', '10', '200', 'Soothing cough formula.'])
+    
+    return response
+
+
+@login_required
+def bulk_upload_drugs(request):
+    errors = []
+    success_count = 0
+    skipped_count = 0
+    
+    if request.method == 'POST':
+        form = BulkUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            uploaded_file = request.FILES['file']
+            name = uploaded_file.name.lower()
+            
+            rows_data = []
+            headers = []
+            
+            try:
+                if name.endswith('.csv'):
+                    file_data = uploaded_file.read().decode('utf-8-sig')
+                    io_string = io.StringIO(file_data)
+                    reader = csv.reader(io_string)
+                    rows = list(reader)
+                    if rows:
+                        headers = [h.strip().lower() for h in rows[0]]
+                        for r_idx, r in enumerate(rows[1:], start=2):
+                            if not any(cell.strip() for cell in r):
+                                continue # skip blank rows
+                            row_dict = {}
+                            for i, h in enumerate(headers):
+                                row_dict[h] = r[i].strip() if i < len(r) else ""
+                            row_dict['_row_num'] = r_idx
+                            rows_data.append(row_dict)
+                else: # .xlsx
+                    wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+                    sheet = wb.active
+                    rows = list(sheet.iter_rows(values_only=True))
+                    if rows:
+                        headers = [str(h).strip().lower() for h in rows[0] if h is not None]
+                        for r_idx, r in enumerate(rows[1:], start=2):
+                            if not any(cell is not None and str(cell).strip() for cell in r):
+                                continue # skip blank rows
+                            row_dict = {}
+                            for i, h in enumerate(headers):
+                                val = r[i] if i < len(r) else ""
+                                row_dict[h] = str(val).strip() if val is not None else ""
+                            row_dict['_row_num'] = r_idx
+                            rows_data.append(row_dict)
+            except Exception as e:
+                errors.append(f"Failed to parse file: {str(e)}")
+                
+            # Check required headers
+            required_fields = ['drug_name', 'category', 'unit', 'reorder_level', 'min_stock', 'max_stock']
+            missing_fields = [f for f in required_fields if f not in headers]
+            if missing_fields:
+                errors.append(f"Missing required columns in header: {', '.join(missing_fields)}")
+                
+            if not errors and not rows_data:
+                errors.append("The uploaded file does not contain any data rows.")
+
+            if not errors:
+                # Validate and insert in transaction
+                valid_categories = {k.lower(): k for k, v in Drug.CATEGORY_CHOICES}
+                valid_units = {k.lower(): k for k, v in Drug.UNIT_CHOICES}
+                
+                try:
+                    with transaction.atomic():
+                        drugs_to_create = []
+                        for row in rows_data:
+                            row_num = row['_row_num']
+                            d_name = row.get('drug_name', '')
+                            cat_raw = row.get('category', '').strip().lower()
+                            unit_raw = row.get('unit', '').strip().lower()
+                            r_lvl = row.get('reorder_level', '')
+                            min_s = row.get('min_stock', '')
+                            max_s = row.get('max_stock', '')
+                            desc = row.get('description', '')
+                            
+                            # Validations
+                            row_errors = []
+                            if not d_name:
+                                row_errors.append("Drug name is required.")
+                                
+                            cat = ""
+                            if not cat_raw:
+                                row_errors.append("Category is required.")
+                            elif cat_raw not in valid_categories:
+                                row_errors.append(f"Invalid category '{row.get('category', '')}'. Must be one of: {', '.join(valid_categories.values())}.")
+                            else:
+                                cat = valid_categories[cat_raw]
+                                
+                            unit = ""
+                            if not unit_raw:
+                                row_errors.append("Unit is required.")
+                            elif unit_raw not in valid_units:
+                                row_errors.append(f"Invalid unit '{row.get('unit', '')}'. Must be one of: {', '.join(valid_units.values())}.")
+                            else:
+                                unit = valid_units[unit_raw]
+                                
+                            # Numeric validations
+                            try:
+                                r_lvl_val = int(r_lvl)
+                                if r_lvl_val < 0:
+                                    row_errors.append("Reorder level must be >= 0.")
+                            except ValueError:
+                                row_errors.append(f"Invalid reorder level '{r_lvl}'. Must be an integer.")
+                                
+                            try:
+                                min_s_val = int(min_s)
+                                if min_s_val < 0:
+                                    row_errors.append("Min stock must be >= 0.")
+                            except ValueError:
+                                row_errors.append(f"Invalid min stock '{min_s}'. Must be an integer.")
+                                
+                            try:
+                                max_s_val = int(max_s)
+                                if max_s_val < 0:
+                                    row_errors.append("Max stock must be >= 0.")
+                            except ValueError:
+                                row_errors.append(f"Invalid max stock '{max_s}'. Must be an integer.")
+                            
+                            if not row_errors:
+                                # Check duplicate in DB or list
+                                if Drug.objects.filter(drug_name__iexact=d_name).exists() or any(d.drug_name.lower() == d_name.lower() for d in drugs_to_create):
+                                    skipped_count += 1
+                                else:
+                                    drugs_to_create.append(Drug(
+                                        drug_name=d_name,
+                                        category=cat,
+                                        unit=unit,
+                                        reorder_level=r_lvl_val,
+                                        min_stock=min_s_val,
+                                        max_stock=max_s_val,
+                                        description=desc
+                                    ))
+                            else:
+                                for err in row_errors:
+                                    errors.append(f"Row {row_num}: {err}")
+                        
+                        if not errors:
+                            # Save all
+                            Drug.objects.bulk_create(drugs_to_create)
+                            success_count = len(drugs_to_create)
+                        else:
+                            # Raise exception to force transaction rollback
+                            raise ValidationError("Validation failed.")
+                except ValidationError:
+                    # Expected if we have errors, transaction is rolled back
+                    pass
+                except Exception as e:
+                    errors.append(f"Database error occurred: {str(e)}")
+
+            if not errors:
+                msg = f"Successfully imported {success_count} new drugs."
+                if skipped_count > 0:
+                    msg += f" {skipped_count} existing drugs were skipped."
+                messages.success(request, msg)
+                return redirect('drug_list')
+    else:
+        form = BulkUploadForm()
+        
+    return render(request, 'inventory/drugs/bulk_upload.html', {
+        'form': form,
+        'errors': errors,
+        'title': 'Bulk Upload Drugs'
+    })
+
 

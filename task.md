@@ -20,11 +20,13 @@
 - `[x]` Create sample data seed script (Django command)
 - `[x]` Run migrations and verify locally
 - `[x]` **User Management Module**
-- `[x]` **Dark/Light Mode Theme Support**:
-  - `[x]` Add `darkMode: 'class'` and blocking header script in `base.html`
-  - `[x]` Add animated Sun/Moon toggle button in the header in `base.html`
-  - `[x]` Update `TailwindFormMixin` in `forms.py` with theme-responsive classes
-  - `[x]` Update dashboard cards, metrics, and categories to use light/dark styles
-  - `[x]` Update list directories (Drugs, Batches, Suppliers, Transactions, Alerts, Users)
-  - `[x]` Update details and form templates
-  - `[x]` Run test suite verification
+- `[x]` **Dark/Light Mode Theme Support**
+- `[x]` **Branding Favicon Support**
+- `[x]` **Bulk Drug Upload (Excel/CSV)**:
+  - `[x]` Install `openpyxl` library in virtual environment
+  - `[x]` Add `BulkUploadForm` in `forms.py`
+  - `[x]` Implement template download and parsing views in `views.py`
+  - `[x]` Configure routes in `urls.py`
+  - `[x]` Add link/button to `drugs/list.html`
+  - `[x]` Create `drugs/bulk_upload.html` form and feedback layout
+  - `[x]` Add unit tests in `tests.py` and verify all tests pass
