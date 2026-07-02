@@ -1,0 +1,116 @@
+{% extends 'inventory/base.html' %}
+
+{% block title %}Alerts Center{% endblock %}
+{% block page_title %}Alerts & Notifications Center{% endblock %}
+
+{% block content %}
+<!-- Alerts filters toolbar -->
+<div class="mb-6 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-4 md:p-5 shadow-lg flex flex-col md:flex-row items-center justify-between gap-4">
+    
+    <div class="flex items-center gap-3">
+        <span class="h-2 w-2 rounded-full bg-rose-500 animate-pulse"></span>
+        <span class="text-sm font-semibold text-slate-800 dark:text-white">Filter Alerts</span>
+    </div>
+
+    <form method="GET" action="{% url 'alerts_list' %}" class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+        <!-- Status Filter -->
+        <select name="status" class="bg-slate-100 border border-slate-300 text-slate-800 dark:bg-slate-850 dark:border-slate-700 dark:text-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-teal-500 transition">
+            <option value="PENDING" {% if selected_status == 'PENDING' %}selected{% endif %}>Pending Alerts</option>
+            <option value="RESOLVED" {% if selected_status == 'RESOLVED' %}selected{% endif %}>Resolved Logs</option>
+            <option value="" {% if selected_status == '' %}selected{% endif %}>All Alerts History</option>
+        </select>
+        
+        <!-- Type Filter -->
+        <select name="type" class="bg-slate-100 border border-slate-300 text-slate-800 dark:bg-slate-850 dark:border-slate-700 dark:text-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-teal-500 transition">
+            <option value="">All Alert Types</option>
+            <option value="EXPIRY" {% if selected_type == 'EXPIRY' %}selected{% endif %}>Expiry Warnings</option>
+            <option value="REORDER" {% if selected_type == 'REORDER' %}selected{% endif %}>Reorder Levels</option>
+        </select>
+
+        <button type="submit" class="rounded-lg bg-teal-600 hover:bg-teal-500 px-4.5 py-1.5 text-xs font-semibold text-white transition-colors">
+            Apply
+        </button>
+    </form>
+</div>
+
+<!-- Alerts List -->
+<div class="space-y-4">
+    {% for alert in alerts %}
+    <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-5 shadow-xl transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4 {% if alert.status == 'RESOLVED' %} opacity-60 dark:border-slate-900 {% endif %}">
+        <div class="flex gap-4 items-start">
+            
+            <!-- Type Icon Container -->
+            <div class="rounded-xl p-3 border {% if alert.status == 'RESOLVED' %} bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800/20 dark:border-slate-800 dark:text-slate-500 {% elif alert.alert_type == 'EXPIRY' %} bg-rose-50 border-rose-100 text-rose-600 dark:bg-rose-500/10 dark:border-rose-500/20 dark:text-rose-400 {% else %} bg-amber-50 border-amber-100 text-amber-600 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400 {% endif %}">
+                {% if alert.alert_type == 'EXPIRY' %}
+                <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {% else %}
+                <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {% endif %}
+            </div>
+
+            <!-- Details -->
+            <div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold uppercase tracking-wider {% if alert.status == 'RESOLVED' %} text-slate-400 dark:text-slate-500 {% elif alert.alert_type == 'EXPIRY' %} text-rose-600 dark:text-rose-400 {% else %} text-amber-600 dark:text-amber-400 {% endif %}">
+                        {{ alert.get_alert_type_display }}
+                    </span>
+                    
+                    {% if alert.status == 'RESOLVED' %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-500">RESOLVED</span>
+                    {% else %}
+                        {% if alert.alert_type == 'EXPIRY' %}
+                            <!-- Determine sub-severity based on expiry date -->
+                            {% if alert.batch.expiry_status_zone == 'EXPIRED' %}
+                            <span class="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/20 px-2.5 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-500">EXPIRED</span>
+                            {% elif alert.batch.expiry_status_zone == 'CRITICAL' %}
+                            <span class="inline-flex items-center rounded-full bg-red-50 border border-red-200 dark:bg-red-650/10 dark:border-red-500/20 px-2.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-500">Critical (0-30 days)</span>
+                            {% elif alert.batch.expiry_status_zone == 'PLANNING' %}
+                            <span class="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/20 px-2.5 py-0.5 text-[10px] font-bold text-amber-605 dark:text-amber-500">Planning (31-90 days)</span>
+                            {% elif alert.batch.expiry_status_zone == 'MONITORING' %}
+                            <span class="inline-flex items-center rounded-full bg-blue-50 border border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/20 px-2.5 py-0.5 text-[10px] font-bold text-blue-600 dark:text-blue-500">Monitoring (91-180 days)</span>
+                            {% endif %}
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/20 px-2.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">Reorder level</span>
+                        {% endif %}
+                    {% endif %}
+                </div>
+
+                <p class="text-sm font-semibold text-slate-850 dark:text-white mt-1 leading-relaxed">{{ alert.message }}</p>
+                <div class="flex items-center gap-3 text-[10px] text-slate-400 dark:text-slate-500 mt-2 font-mono">
+                    <span>Generated: {{ alert.alert_date|date:"Y-m-d H:i" }}</span>
+                    {% if alert.batch %}
+                    <span>&bull;</span>
+                    <a href="{% url 'drug_detail' alert.batch.drug.pk %}" class="hover:text-teal-600 dark:hover:text-teal-400">View Drug Profile</a>
+                    {% elif alert.drug %}
+                    <span>&bull;</span>
+                    <a href="{% url 'drug_detail' alert.drug.pk %}" class="hover:text-teal-600 dark:hover:text-teal-400">View Drug Profile</a>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Action Resolves -->
+        <div class="self-end md:self-center">
+            {% if alert.status == 'PENDING' %}
+            <a href="{% url 'resolve_alert' alert.pk %}" class="inline-flex items-center justify-center px-4 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-750 dark:border-slate-700 dark:text-white text-xs font-semibold transition-colors">
+                Mark Resolved
+            </a>
+            {% else %}
+            <span class="text-xs text-slate-400 dark:text-slate-500 font-mono">Resolved</span>
+            {% endif %}
+        </div>
+
+    </div>
+    {% empty %}
+    <div class="text-center py-16 text-slate-450 dark:text-slate-500 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl">
+        <svg class="h-10 w-10 text-slate-350 dark:text-slate-700 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+        No alerts match the selected filters.
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

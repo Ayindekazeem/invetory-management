@@ -1,0 +1,30 @@
+# Tasks
+
+- `[x]` Setup Python Virtual Environment and Install Dependencies (`django`, `pymysql`, `cryptography`)
+- `[x]` Create Django project (`inventory_project`) and application (`inventory`)
+- `[x]` Configure settings.py (MySQL database configuration, Custom User model, static files)
+- `[x]` Define Database Models (CustomUser, Supplier, Drug, Batch, StockTransaction, Alert)
+- `[x]` Implement utility functions (FIFO queue processing, alert calculation) in `utils.py`
+- `[x]` Create Forms in `forms.py` with Tailwind styling classes
+- `[x]` Create HTML Templates with premium dark slate / teal design:
+  - `[x]` Base layout with responsive sidebar and Alpine.js (`base.html`)
+  - `[x]` Login/Profile templates (`login.html`, `profile.html`)
+  - `[x]` Dashboard with KPI cards and status indicators (`dashboard.html`)
+  - `[x]` Drug Directory and Add/Edit forms
+  - `[x]` Supplier Directory and Add/Edit forms
+  - `[x]` Batch Directory (Stock-In) and Add/Edit forms
+  - `[x]` Transaction Log and Stock-Out form (with FIFO / Batch selection)
+  - `[x]` Alerts Center (filtering by status/type)
+  - `[x]` Reports Dashboard (with CSV export capability)
+- `[x]` Define Views and URL patterns
+- `[x]` Create sample data seed script (Django command)
+- `[x]` Run migrations and verify locally
+- `[x]` **User Management Module**
+- `[x]` **Dark/Light Mode Theme Support**:
+  - `[x]` Add `darkMode: 'class'` and blocking header script in `base.html`
+  - `[x]` Add animated Sun/Moon toggle button in the header in `base.html`
+  - `[x]` Update `TailwindFormMixin` in `forms.py` with theme-responsive classes
+  - `[x]` Update dashboard cards, metrics, and categories to use light/dark styles
+  - `[x]` Update list directories (Drugs, Batches, Suppliers, Transactions, Alerts, Users)
+  - `[x]` Update details and form templates
+  - `[x]` Run test suite verification

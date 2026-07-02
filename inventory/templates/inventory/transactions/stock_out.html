@@ -1,0 +1,153 @@
+{% extends 'inventory/base.html' %}
+
+{% block title %}Stock-Out Distribution{% endblock %}
+{% block page_title %}Stock-Out Dispatch{% endblock %}
+
+{% block content %}
+<!-- Preload Drug-Batch Map for client-side dynamic select -->
+<script>
+    window.drugBatches = {
+        {% for drug in form.fields.drug.queryset %}
+            "{{ drug.id }}": [
+                {% for batch in drug.batches.all %}
+                    {% if batch.quantity_remaining > 0 %}
+                        { 
+                            id: "{{ batch.id }}", 
+                            number: "{{ batch.batch_number }}", 
+                            remaining: {{ batch.quantity_remaining }}, 
+                            expiry: "{{ batch.expiry_date|date:'Y-m-d' }}" 
+                        },
+                    {% endif %}
+                {% endfor %}
+            ],
+        {% endfor %}
+    };
+</script>
+
+<div class="max-w-2xl mx-auto" x-data="{ 
+    method: '{{ form.method.value|default:'FEFO' }}',
+    selectedDrug: '{{ form.drug.value|default:'' }}',
+    selectedBatch: '{{ form.batch.value|default:'' }}',
+    batchesList: [],
+    updateBatches() {
+        if (this.selectedDrug && window.drugBatches[this.selectedDrug]) {
+            this.batchesList = window.drugBatches[this.selectedDrug];
+        } else {
+            this.batchesList = [];
+        }
+        // Reset batch if it doesn't belong to current drug
+        if (!this.batchesList.some(b => b.id == this.selectedBatch)) {
+            this.selectedBatch = '';
+        }
+    }
+}" x-init="updateBatches()">
+    
+    <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-6 md:p-8 shadow-xl">
+        <div class="flex items-center gap-3 border-b border-slate-105 dark:border-slate-800 pb-4 mb-6">
+            <span class="h-8 w-8 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
+                </svg>
+            </span>
+            <div>
+                <h3 class="text-base font-bold text-slate-850 dark:text-white">Dispense Inventory (Stock-Out)</h3>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Distributes items out of the pharmacy to wards or patients.</p>
+            </div>
+        </div>
+
+        <form method="POST" class="space-y-5">
+            {% csrf_token %}
+            
+            {% if form.non_field_errors %}
+            <div class="p-3.5 bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/25 rounded-lg text-xs text-rose-600 dark:text-rose-400">
+                {% for error in form.non_field_errors %}
+                <p>{{ error }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Distribution Method Selector -->
+            <div class="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-150 dark:border-slate-850">
+                <label class="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Deduction Method</label>
+                <div class="flex gap-6">
+                    <label class="inline-flex items-center cursor-pointer text-sm text-slate-800 dark:text-slate-200">
+                        <input type="radio" name="method" value="FEFO" x-model="method" class="h-4 w-4 bg-white border-slate-300 text-teal-600 focus:ring-teal-500 dark:bg-slate-800 dark:border-slate-700 dark:focus:ring-offset-slate-900 mr-2">
+                        First-Expired, First-Out (Auto FEFO)
+                    </label>
+                    <label class="inline-flex items-center cursor-pointer text-sm text-slate-800 dark:text-slate-200">
+                        <input type="radio" name="method" value="BATCH" x-model="method" class="h-4 w-4 bg-white border-slate-300 text-teal-600 focus:ring-teal-500 dark:bg-slate-800 dark:border-slate-700 dark:focus:ring-offset-slate-900 mr-2">
+                        Select Specific Batch Manually
+                    </label>
+                </div>
+            </div>
+
+            <!-- Drug Field -->
+            <div>
+                <label for="id_drug" class="block text-xs font-semibold text-slate-505 dark:text-slate-400 uppercase tracking-wider mb-2">Select Drug to Dispense</label>
+                <select name="drug" id="id_drug" x-model="selectedDrug" @change="updateBatches()" class="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-4 py-2 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 dark:bg-slate-800 dark:border-slate-700 dark:text-white transition text-sm">
+                    <option value="">Select Drug</option>
+                    {% for drug in form.fields.drug.queryset %}
+                    <option value="{{ drug.id }}">{{ drug.drug_name }} (Avail: {{ drug.total_stock }} {{ drug.unit|lower }}s)</option>
+                    {% endfor %}
+                </select>
+                {% if form.drug.errors %}
+                <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.drug.errors.0 }}</p>
+                {% endif %}
+            </div>
+
+            <!-- Dynamic Batch Selection -->
+            <div x-show="method === 'BATCH'" x-transition style="display: none;">
+                <label for="id_batch" class="block text-xs font-semibold text-slate-505 dark:text-slate-400 uppercase tracking-wider mb-2">Select Specific Batch Code</label>
+                <select name="batch" id="id_batch" x-model="selectedBatch" class="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-4 py-2 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 dark:bg-slate-800 dark:border-slate-700 dark:text-white transition text-sm">
+                    <option value="">Select Batch</option>
+                    <template x-for="batch in batchesList" :key="batch.id">
+                        <option :value="batch.id" :selected="batch.id == selectedBatch" x-text="'Batch: ' + batch.number + ' (Remaining: ' + batch.remaining + ', Expires: ' + batch.expiry + ')'"></option>
+                    </template>
+                </select>
+                {% if form.batch.errors %}
+                <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.batch.errors.0 }}</p>
+                {% endif %}
+                <template x-if="selectedDrug && batchesList.length === 0">
+                    <p class="text-xs text-rose-605 dark:text-rose-400 mt-1.5">No active batches with stock remaining exist for this drug.</p>
+                </template>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 border-t border-slate-100 dark:border-slate-800 pt-5">
+                <!-- Quantity -->
+                <div>
+                    <label for="{{ form.quantity.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Dispense Quantity (Units)</label>
+                    {{ form.quantity }}
+                    {% if form.quantity.errors %}
+                    <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.quantity.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Reference -->
+                <div>
+                    <label for="{{ form.reference.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Dispense Reference / Memo</label>
+                    {{ form.reference }}
+                    {% if form.reference.errors %}
+                    <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.reference.errors.0 }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Info banner on auto-fefo -->
+            <div x-show="method === 'FEFO' && selectedDrug" class="bg-teal-50 border border-teal-100 text-teal-700 dark:bg-teal-500/5 dark:border-teal-500/20 dark:text-teal-400 text-xs p-3 rounded-lg leading-relaxed" style="display: none;">
+                <span class="font-bold">FEFO Enabled:</span> Stock will be automatically deducted from the batches closest to expiry first. This ensures optimal stock rotation and minimizes pharmaceutical waste.
+            </div>
+
+            <!-- Submit buttons -->
+            <div class="flex justify-end gap-3 border-t border-slate-100 dark:border-slate-800 pt-5 mt-6">
+                <a href="{% url 'transaction_list' %}" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 border border-slate-350 dark:border-slate-700 transition-colors">
+                    Cancel
+                </a>
+                <button type="submit" class="px-5 py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-sm font-semibold text-white shadow-lg shadow-rose-500/15 transition-colors">
+                    Post Stock-Out Transaction
+                </button>
+            </div>
+
+        </form>
+    </div>
+</div>
+{% endblock %}
