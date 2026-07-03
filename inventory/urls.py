@@ -32,6 +32,9 @@ urlpatterns = [
     # Transactions
     path('transactions/', views.transaction_list, name='transaction_list'),
     path('transactions/stock-in/', views.stock_in_view, name='stock_in'),
+    path('transactions/stock-in/bulk/', views.bulk_stock_in, name='bulk_stock_in'),
+    path('transactions/stock-in/template/', views.download_stock_in_template, name='download_stock_in_template'),
+
     path('transactions/stock-out/', views.stock_out_view, name='stock_out'),
     
     # Alerts
@@ -42,6 +45,8 @@ urlpatterns = [
     path('reports/', views.reports_dashboard, name='reports_dashboard'),
     path('reports/export/drugs/', views.export_drugs_csv, name='export_drugs_csv'),
     path('reports/export/transactions/', views.export_transactions_csv, name='export_transactions_csv'),
+    path('reports/export/expiring-batches/', views.export_expiring_batches_csv, name='export_expiring_batches_csv'),
+
 
     # Users (Admin Only)
     path('users/', views.user_list, name='user_list'),
