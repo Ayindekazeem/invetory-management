@@ -437,6 +437,43 @@ def resolve_alert(request, pk):
 
 
 # --- REPORTS & EXPORT VIEWS ---
+def _get_expiring_batches_queryset(request, today):
+    expiry_days = request.GET.get('expiry_days', '180')
+    expiry_start = request.GET.get('expiry_start', '')
+    expiry_end = request.GET.get('expiry_end', '')
+
+    filters = {
+        'quantity_remaining__gt': 0,
+    }
+
+    if expiry_days == 'custom':
+        if expiry_start:
+            try:
+                filters['expiry_date__gte'] = datetime.datetime.strptime(expiry_start, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        if expiry_end:
+            try:
+                filters['expiry_date__lte'] = datetime.datetime.strptime(expiry_end, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+    elif expiry_days == 'all':
+        # Show all future expirations
+        filters['expiry_date__gt'] = today
+    else:
+        # Defaults or preset days
+        try:
+            days = int(expiry_days)
+        except ValueError:
+            days = 180
+            expiry_days = '180'
+        
+        filters['expiry_date__gt'] = today
+        filters['expiry_date__lte'] = today + datetime.timedelta(days=days)
+
+    return Batch.objects.filter(**filters).order_by('expiry_date'), expiry_days, expiry_start, expiry_end
+
+
 @login_required
 def reports_dashboard(request):
     # Dynamic calculations
@@ -452,12 +489,8 @@ def reports_dashboard(request):
         total_dispensed=Sum('quantity')
     ).order_by('-total_dispensed')[:10]
 
-    # 2. Expiry forecasts (batches expiring in the next 180 days)
-    expiring_batches = Batch.objects.filter(
-        expiry_date__gt=today,
-        expiry_date__lte=today + datetime.timedelta(days=180),
-        quantity_remaining__gt=0
-    ).order_by('expiry_date')
+    # 2. Expiry forecasts (with filters)
+    expiring_batches, expiry_days, expiry_start, expiry_end = _get_expiring_batches_queryset(request, today)
 
     # 3. Overall Inventory Value approximation (if cost were tracked, but since we don't have it, let's display counts)
     category_summary = Drug.objects.values('category').annotate(
@@ -468,8 +501,46 @@ def reports_dashboard(request):
         'drug_sales': drug_sales,
         'expiring_batches': expiring_batches,
         'category_summary': category_summary,
+        'expiry_days': expiry_days,
+        'expiry_start': expiry_start,
+        'expiry_end': expiry_end,
     }
     return render(request, 'inventory/reports/dashboard.html', context)
+
+
+@login_required
+def export_expiring_batches_csv(request):
+    today = timezone.now().date()
+    expiring_batches, expiry_days, expiry_start, expiry_end = _get_expiring_batches_queryset(request, today)
+    
+    response = HttpResponse(content_type='text/csv')
+    
+    # Generate custom filename indicating filters
+    if expiry_days == 'custom':
+        filename = f"expiring_batches_custom_{expiry_start}_to_{expiry_end}.csv"
+    elif expiry_days == 'all':
+        filename = "expiring_batches_all_future.csv"
+    else:
+        filename = f"expiring_batches_{expiry_days}_days.csv"
+        
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    
+    writer = csv.writer(response)
+    writer.writerow(['Batch Number', 'Drug Name', 'Category', 'Expiry Date', 'Days Remaining', 'Quantity Remaining', 'Expiry Status Zone'])
+    
+    for batch in expiring_batches:
+        writer.writerow([
+            batch.batch_number,
+            batch.drug.drug_name,
+            batch.drug.category,
+            batch.expiry_date.strftime('%Y-%m-%d') if batch.expiry_date else '',
+            batch.days_until_expiry,
+            batch.quantity_remaining,
+            batch.expiry_status_zone
+        ])
+        
+    return response
+
 
 
 @login_required
@@ -769,5 +840,233 @@ def bulk_upload_drugs(request):
         'errors': errors,
         'title': 'Bulk Upload Drugs'
     })
+
+
+@login_required
+def download_stock_in_template(request):
+    """Generates a downloadable CSV template for bulk Stock-In uploads."""
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="stock_in_upload_template.csv"'
+    
+    writer = csv.writer(response)
+    writer.writerow(['drug_name', 'batch_number', 'manufacturing_date', 'expiry_date', 'quantity_received', 'supplier_name', 'reference'])
+    
+    # Try to write matching real catalog items or fallback to Paracetamol
+    drug_sample = Drug.objects.first()
+    drug_name = drug_sample.drug_name if drug_sample else "Paracetamol 500mg"
+    supplier_sample = Supplier.objects.first()
+    supplier_name = supplier_sample.supplier_name if supplier_sample else "Test Pharma Inc"
+    
+    today = datetime.date.today()
+    mfg_date = (today - datetime.timedelta(days=10)).strftime('%Y-%m-%d')
+    exp_date = (today + datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    writer.writerow([drug_name, 'BATCH-001', mfg_date, exp_date, '500', supplier_name, 'INV-2026-001'])
+    writer.writerow([drug_name, 'BATCH-002', mfg_date, exp_date, '250', supplier_name, 'PO-99238'])
+    
+    return response
+
+
+@login_required
+def bulk_stock_in(request):
+    errors = []
+    success_count = 0
+    
+    if request.method == 'POST':
+        form = BulkUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            uploaded_file = request.FILES['file']
+            name = uploaded_file.name.lower()
+            
+            rows_data = []
+            headers = []
+            
+            try:
+                if name.endswith('.csv'):
+                    file_data = uploaded_file.read().decode('utf-8-sig')
+                    io_string = io.StringIO(file_data)
+                    reader = csv.reader(io_string)
+                    rows = list(reader)
+                    if rows:
+                        headers = [h.strip().lower() for h in rows[0]]
+                        for r_idx, r in enumerate(rows[1:], start=2):
+                            if not any(cell.strip() for cell in r):
+                                continue # skip blank rows
+                            row_dict = {}
+                            for i, h in enumerate(headers):
+                                row_dict[h] = r[i].strip() if i < len(r) else ""
+                            row_dict['_row_num'] = r_idx
+                            rows_data.append(row_dict)
+                else: # .xlsx
+                    wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+                    sheet = wb.active
+                    rows = list(sheet.iter_rows(values_only=True))
+                    if rows:
+                        headers = [str(h).strip().lower() for h in rows[0] if h is not None]
+                        for r_idx, r in enumerate(rows[1:], start=2):
+                            if not any(cell is not None and str(cell).strip() for cell in r):
+                                continue # skip blank rows
+                            row_dict = {}
+                            for i, h in enumerate(headers):
+                                val = r[i] if i < len(r) else ""
+                                row_dict[h] = str(val).strip() if val is not None else ""
+                            row_dict['_row_num'] = r_idx
+                            rows_data.append(row_dict)
+            except Exception as e:
+                errors.append(f"Failed to parse file: {str(e)}")
+                
+            # Check required headers
+            required_fields = ['drug_name', 'batch_number', 'manufacturing_date', 'expiry_date', 'quantity_received']
+            missing_fields = [f for f in required_fields if f not in headers]
+            if missing_fields:
+                errors.append(f"Missing required columns in header: {', '.join(missing_fields)}")
+                
+            if not errors and not rows_data:
+                errors.append("The uploaded file does not contain any data rows.")
+
+            if not errors:
+                # --- Pass 1: validate all rows, build cleaned payload ---
+                validated_rows = []
+                for row in rows_data:
+                    row_num = row['_row_num']
+                    d_name = row.get('drug_name', '').strip()
+                    b_num = row.get('batch_number', '').strip()
+                    mfg_str = row.get('manufacturing_date', '').strip()
+                    exp_str = row.get('expiry_date', '').strip()
+                    qty_str = row.get('quantity_received', '').strip()
+                    sup_name = row.get('supplier_name', '').strip()
+                    ref = row.get('reference', '').strip()
+
+                    row_errors = []
+
+                    # Validate Drug
+                    drug_obj = None
+                    if not d_name:
+                        row_errors.append("Drug name is required.")
+                    else:
+                        try:
+                            drug_obj = Drug.objects.get(drug_name__iexact=d_name)
+                        except Drug.DoesNotExist:
+                            row_errors.append(f"Drug '{d_name}' does not exist in catalog. Please add it first.")
+
+                    # Validate Batch Number
+                    if not b_num:
+                        row_errors.append("Batch number is required.")
+
+                    # Validate Manufacturing Date
+                    mfg_date = None
+                    if not mfg_str:
+                        row_errors.append("Manufacturing date is required.")
+                    else:
+                        try:
+                            mfg_date = datetime.datetime.strptime(mfg_str.split(' ')[0], '%Y-%m-%d').date()
+                        except ValueError:
+                            row_errors.append(f"Invalid manufacturing date format '{mfg_str}'. Use YYYY-MM-DD.")
+
+                    # Validate Expiry Date
+                    exp_date = None
+                    if not exp_str:
+                        row_errors.append("Expiry date is required.")
+                    else:
+                        try:
+                            exp_date = datetime.datetime.strptime(exp_str.split(' ')[0], '%Y-%m-%d').date()
+                        except ValueError:
+                            row_errors.append(f"Invalid expiry date format '{exp_str}'. Use YYYY-MM-DD.")
+
+                    # Date ordering
+                    if mfg_date and exp_date and mfg_date >= exp_date:
+                        row_errors.append("Expiry date must be after manufacturing date.")
+
+                    # Validate Quantity
+                    qty_val = 0
+                    if not qty_str:
+                        row_errors.append("Quantity received is required.")
+                    else:
+                        try:
+                            qty_val = int(qty_str)
+                            if qty_val < 1:
+                                row_errors.append("Quantity received must be at least 1.")
+                        except ValueError:
+                            row_errors.append(f"Invalid quantity '{qty_str}'. Must be an integer.")
+
+                    if row_errors:
+                        for err in row_errors:
+                            errors.append(f"Row {row_num}: {err}")
+                    else:
+                        validated_rows.append({
+                            'drug': drug_obj,
+                            'batch_number': b_num,
+                            'mfg_date': mfg_date,
+                            'exp_date': exp_date,
+                            'qty': qty_val,
+                            'supplier_name': sup_name,
+                            'reference': ref,
+                        })
+
+                # --- Pass 2: commit only if zero validation errors ---
+                if not errors:
+                    try:
+                        with transaction.atomic():
+                            for payload in validated_rows:
+                                # Resolve or create supplier
+                                supplier_obj = None
+                                if payload['supplier_name']:
+                                    supplier_obj, _ = Supplier.objects.get_or_create(
+                                        supplier_name__iexact=payload['supplier_name'],
+                                        defaults={'supplier_name': payload['supplier_name']}
+                                    )
+
+                                # Create or augment batch
+                                batch, created = Batch.objects.get_or_create(
+                                    drug=payload['drug'],
+                                    batch_number=payload['batch_number'],
+                                    defaults={
+                                        'manufacturing_date': payload['mfg_date'],
+                                        'expiry_date': payload['exp_date'],
+                                        'quantity_received': payload['qty'],
+                                        'quantity_remaining': payload['qty'],
+                                        'supplier': supplier_obj
+                                    }
+                                )
+                                if not created:
+                                    batch.quantity_received += payload['qty']
+                                    batch.quantity_remaining += payload['qty']
+                                    batch.save()
+
+                                # Record Stock Transaction
+                                StockTransaction.objects.create(
+                                    batch=batch,
+                                    transaction_type='IN',
+                                    quantity=payload['qty'],
+                                    user=request.user,
+                                    reference=payload['reference'] or f"Bulk Ingestion ({'Created' if created else 'Updated'} Batch)"
+                                )
+                                success_count += 1
+                    except Exception as e:
+                        errors.append(f"Database error occurred: {str(e)}")
+
+
+            if not errors:
+                messages.success(request, f"Successfully ingested {success_count} stock batches via bulk upload.")
+                check_and_create_alerts()
+                return redirect('transaction_list')
+    else:
+        form = BulkUploadForm()
+        
+    return render(request, 'inventory/transactions/bulk_stock_in.html', {
+        'form': form,
+        'errors': errors,
+        'title': 'Bulk Stock-In Ingestion',
+        'required_cols': [
+            ('drug_name', 'must match an existing catalog drug'),
+            ('batch_number', 'unique code for this delivery batch'),
+            ('manufacturing_date', 'format: YYYY-MM-DD'),
+            ('expiry_date', 'format: YYYY-MM-DD, must be after manufacturing'),
+            ('quantity_received', 'whole integer ≥ 1'),
+            ('supplier_name', 'optional — auto-created if not found'),
+            ('reference', 'optional invoice or PO number'),
+        ]
+    })
+
 
 

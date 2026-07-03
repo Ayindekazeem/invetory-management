@@ -228,4 +228,139 @@ class InventorySystemTestCase(TestCase):
         self.assertTrue(len(response.context['errors']) > 0)
         self.assertEqual(Drug.objects.filter(drug_name="Invalid Drug").count(), 0)
 
+    def test_reports_dashboard_expiry_filters(self):
+        """Test that reports dashboard allows filtering upcoming expirations correctly."""
+        self.client.force_login(self.user)
+        
+        # 1. Default (180 days) - both batches should be included
+        response = self.client.get('/reports/')
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertIn(self.batch_critical, expiring)
+        self.assertIn(self.batch_monitoring, expiring)
+
+        # 2. Filter for next 30 days - only BATCH-CRT should be included
+        response = self.client.get('/reports/', {'expiry_days': '30'})
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertIn(self.batch_critical, expiring)
+        self.assertNotIn(self.batch_monitoring, expiring)
+
+        # 3. Custom date range filter - e.g. from 50 days to 150 days out
+        today = datetime.date.today()
+        start_date = (today + datetime.timedelta(days=50)).strftime('%Y-%m-%d')
+        end_date = (today + datetime.timedelta(days=150)).strftime('%Y-%m-%d')
+        response = self.client.get('/reports/', {
+            'expiry_days': 'custom',
+            'expiry_start': start_date,
+            'expiry_end': end_date
+        })
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertNotIn(self.batch_critical, expiring)
+        self.assertIn(self.batch_monitoring, expiring)
+
+    def test_export_expiring_batches_csv_filters(self):
+        """Test exporting the filtered expiring batches as CSV file."""
+        self.client.force_login(self.user)
+        
+        # 1. Test Default (180 days) export
+        response = self.client.get('/reports/export/expiring-batches/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode('utf-8')
+        self.assertIn('BATCH-CRT', content)
+        self.assertIn('BATCH-MON', content)
+
+        # 2. Test 30 days export
+        response = self.client.get('/reports/export/expiring-batches/', {'expiry_days': '30'})
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('BATCH-CRT', content)
+        self.assertNotIn('BATCH-MON', content)
+
+        # 3. Test Custom date range export
+        today = datetime.date.today()
+        start_date = (today + datetime.timedelta(days=50)).strftime('%Y-%m-%d')
+        end_date = (today + datetime.timedelta(days=150)).strftime('%Y-%m-%d')
+        response = self.client.get('/reports/export/expiring-batches/', {
+            'expiry_days': 'custom',
+            'expiry_start': start_date,
+            'expiry_end': end_date
+        })
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertNotIn('BATCH-CRT', content)
+        self.assertIn('BATCH-MON', content)
+
+    def test_bulk_stock_in_csv_valid(self):
+        """Test valid bulk stock-in CSV creates batches, transactions, and redirects."""
+        self.client.force_login(self.user)
+        today = datetime.date.today()
+        mfg = (today - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+        exp = (today + datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+
+        csv_content = (
+            "drug_name,batch_number,manufacturing_date,expiry_date,quantity_received,supplier_name,reference\n"
+            f"Paracetamol 500mg,BULK-001,{mfg},{exp},200,Test Pharma Inc,INV-001\n"
+            f"Paracetamol 500mg,BULK-002,{mfg},{exp},100,,\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("stock_in.csv", csv_content.encode('utf-8'), content_type="text/csv")
+
+        response = self.client.post('/transactions/stock-in/bulk/', {'file': mock_file}, follow=True)
+        self.assertEqual(response.status_code, 200)
+
+        # Verify two new batches were created
+        self.assertTrue(self.drug.batches.filter(batch_number='BULK-001').exists())
+        self.assertTrue(self.drug.batches.filter(batch_number='BULK-002').exists())
+
+        # Verify stock transactions were created
+        batch1 = self.drug.batches.get(batch_number='BULK-001')
+        self.assertEqual(StockTransaction.objects.filter(batch=batch1, transaction_type='IN').count(), 1)
+
+        # Verify quantity is correct
+        self.assertEqual(batch1.quantity_remaining, 200)
+
+    def test_bulk_stock_in_csv_invalid(self):
+        """Test invalid bulk stock-in CSV shows errors and rolls back all changes."""
+        self.client.force_login(self.user)
+        today = datetime.date.today()
+        mfg = (today - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+        exp = (today + datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+
+        csv_content = (
+            "drug_name,batch_number,manufacturing_date,expiry_date,quantity_received\n"
+            # Row 2: valid
+            f"Paracetamol 500mg,INVALID-BATCH-A,{mfg},{exp},100\n"
+            # Row 3: drug not in catalog
+            f"NonExistentDrug XYZ,INVALID-BATCH-B,{mfg},{exp},50\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("stock_in_bad.csv", csv_content.encode('utf-8'), content_type="text/csv")
+
+        response = self.client.post('/transactions/stock-in/bulk/', {'file': mock_file})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('errors', response.context)
+        self.assertTrue(len(response.context['errors']) > 0)
+
+        # Verify no batches were created (rollback)
+        self.assertFalse(self.drug.batches.filter(batch_number='INVALID-BATCH-A').exists())
+
+    def test_bulk_stock_in_template_download(self):
+        """Test that the stock-in CSV template is downloadable."""
+        self.client.force_login(self.user)
+        response = self.client.get('/transactions/stock-in/template/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode('utf-8')
+        self.assertIn('drug_name', content)
+        self.assertIn('batch_number', content)
+        self.assertIn('manufacturing_date', content)
+        self.assertIn('expiry_date', content)
+        self.assertIn('quantity_received', content)
+
+
+
+
 

@@ -75,20 +75,39 @@ The database is fully migrated and pre-seeded. You can log in using any of the f
 
 ---
 
-## Verification Results
+## Verification & Updates
 
-### Automated Tests
-We wrote a test suite in [tests.py](file:///c:/Users/IT%20DEPT/Downloads/mr_lary_project/inventory/tests.py) verifying the core domain logic.
-All 9 unit tests passed successfully:
+### 1. Template Error Resolutions
+- **Batches Directory Syntax Error**: Resolved a `TemplateSyntaxError` at `/batches/` where the custom block tag `blockpage_title` was written as a single typo inside the `title` block in [list.html](file:///c:/Users/IT%20HOD/Documents/Lasuproject/invetory-management/inventory/templates/inventory/batches/list.html#L3).
+- **Suppliers Creation Syntax Error**: Fixed a `TemplateSyntaxError` at `/suppliers/add/` caused by an unclosed `{% block content %}` tag in [form.html](file:///c:/Users/IT%20HOD/Documents/Lasuproject/invetory-management/inventory/templates/inventory/suppliers/form.html#L80-L83).
+
+### 2. Time-Based Expiry Filtering & Exporting on Reports Dashboard
+Added an interactive filter panel and export capability on the **Reports & System Analytics** page:
+- **Preset Options**: View soon-to-expire drug batches across horizons of 30, 90, 180 (default), or 365 days, or view all future expirations.
+- **Custom Date Range**: Use Alpine.js to dynamically toggle custom `Start Date` and `End Date` inputs for fine-grained auditing.
+- **Interactive Badge Count**: Displays the precise number of expiring batches matching the current filter horizon.
+- **Filtered CSV Export**: Allows users to download the exact filtered set of expiring batches directly to a CSV file (e.g. `expiring_batches_30_days.csv` or `expiring_batches_custom_2026-07-02_to_2026-08-02.csv`) with the click of an "Export CSV" button in the card header.
+
+### 3. Automated Tests
+We expanded the test suite in [tests.py](file:///c:/Users/IT%20HOD/Documents/Lasuproject/invetory-management/inventory/tests.py) to cover the new report dashboard filters and CSV exports.
+All 11 unit tests run and pass successfully:
 ```bash
 Creating test database for alias 'default'...
-.........
+System check identified some issues:
+
+WARNINGS:
+?: (staticfiles.W004) The directory 'C:\Users\IT HOD\Documents\Lasuproject\invetory-management\static' in the STATICFILES_DIRS setting does not exist.
+
+System check identified 1 issue (0 silenced).
+...........
 ----------------------------------------------------------------------
-Ran 9 tests in 18.859s
+Ran 11 tests in 18.429s
 
 OK
 Destroying test database for alias 'default'...
+Found 11 test(s).
 ```
+
 
 ---
 
@@ -105,3 +124,4 @@ To launch the development server, run the following commands in your terminal:
    python manage.py runserver
    ```
 3. **Open browser**: Go to [http://127.0.0.1:8000/](http://127.0.0.1:8000/) and log in with one of the seeded accounts above!
+
