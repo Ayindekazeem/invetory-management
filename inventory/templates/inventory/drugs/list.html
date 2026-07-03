@@ -1,7 +1,7 @@
 {% extends 'inventory/base.html' %}
 
 {% block title %}Drugs Catalog{% endblock %}
-{% block page_title %}Drugs Catalog{% endblock %}
+{% block page_title %}Drugs Catalog &mdash; {{ active_location.name }}{% endblock %}
 
 {% block content %}
 <!-- Search and Filter Bar -->
@@ -83,7 +83,7 @@
                     <th class="px-6 py-3.5">Category</th>
                     <th class="px-6 py-3.5">Unit</th>
                     <th class="px-6 py-3.5 text-center">Reorder Threshold</th>
-                    <th class="px-6 py-3.5 text-right">In-Stock Quantity</th>
+                    <th class="px-6 py-3.5 text-right">Location Stock</th>
                     <th class="px-6 py-3.5 text-center">Status</th>
                     <th class="px-6 py-3.5 text-center">Actions</th>
                 </tr>
@@ -105,12 +105,12 @@
                     <td class="px-6 py-4 text-slate-500 dark:text-slate-400 text-xs">{{ drug.unit }}</td>
                     <td class="px-6 py-4 text-center font-mono text-xs text-slate-500 dark:text-slate-400">{{ drug.reorder_level }}</td>
                     <td class="px-6 py-4 text-right font-bold font-mono text-slate-800 dark:text-white text-sm">
-                        {{ drug.total_stock }}
+                        {{ drug.stock_at_loc }}
                     </td>
                     <td class="px-6 py-4 text-center">
-                        {% if drug.total_stock == 0 %}
+                        {% if drug.stock_at_loc == 0 %}
                         <span class="inline-flex items-center rounded-full bg-rose-500/10 px-2.5 py-0.5 text-xs font-bold text-rose-600 dark:text-rose-500 border border-rose-500/20">Out of Stock</span>
-                        {% elif drug.is_low_stock %}
+                        {% elif drug.is_low_at_loc %}
                         <span class="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-500 border border-amber-500/20">Low Stock Alert</span>
                         {% else %}
                         <span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-650 dark:text-emerald-400 border border-emerald-500/20">Normal</span>

@@ -1,0 +1,133 @@
+{% extends 'inventory/base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+        
+        <!-- Form Header -->
+        <div class="px-6 py-4 border-b border-slate-100 dark:border-slate-850 bg-slate-50/50 dark:bg-slate-950/20">
+            <h2 class="text-sm font-bold text-slate-850 dark:text-white">Push Stock Transfer Details</h2>
+            <p class="text-xs text-slate-400 mt-0.5">Transfer existing stock batches from <strong>{{ active_location.name }}</strong> directly to another store. Stock is immediately deducted from your inventory and placed in transit.</p>
+        </div>
+        
+        <form method="POST" class="p-6 space-y-4">
+            {% csrf_token %}
+            
+            {% if form.non_field_errors %}
+            <div class="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-xs text-rose-600 dark:text-rose-400">
+                {% for err in form.non_field_errors %}
+                <p>{{ err }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Form fields -->
+            <div class="space-y-4">
+                <!-- Target Store -->
+                <div>
+                    <label for="{{ form.to_location.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Destination Store / Sub-Store</label>
+                    {{ form.to_location }}
+                    {% if form.to_location.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.to_location.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Drug Selection -->
+                <div>
+                    <label for="{{ form.drug.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Select Drug</label>
+                    {{ form.drug }}
+                    {% if form.drug.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.drug.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Batch Selection -->
+                <div>
+                    <label for="{{ form.batch.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Select Batch (Filtered by Drug)</label>
+                    {{ form.batch }}
+                    {% if form.batch.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.batch.errors.0 }}</p>
+                    {% endif %}
+                    <p class="text-[9px] text-slate-400 mt-1">Only batches with remaining stock at {{ active_location.name }} are listed.</p>
+                </div>
+
+                <!-- Quantity -->
+                <div>
+                    <label for="{{ form.quantity.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Transfer Quantity</label>
+                    {{ form.quantity }}
+                    {% if form.quantity.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.quantity.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Reference / Description -->
+                <div>
+                    <label for="{{ form.reference.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Notes / Transfer Reference (Optional)</label>
+                    {{ form.reference }}
+                    {% if form.reference.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.reference.errors.0 }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-850">
+                <a href="{% url 'transfer_list' %}" class="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors">
+                    Cancel
+                </a>
+                <button type="submit" class="rounded-lg bg-teal-600 hover:bg-teal-500 px-5 py-2 text-xs font-semibold text-white transition-colors shadow">
+                    Dispatch Stock
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Dependent Dropdown Script -->
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const drugSelect = document.getElementById('id_drug');
+        const batchSelect = document.getElementById('id_batch');
+        
+        if (drugSelect && batchSelect) {
+            const originalOptions = Array.from(batchSelect.options);
+            
+            function updateBatches() {
+                const selectedText = drugSelect.options[drugSelect.selectedIndex].text.trim();
+                const selectedVal = drugSelect.value;
+                
+                // Clear current options
+                batchSelect.innerHTML = '';
+                
+                // Add placeholder
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '--- Select a Batch ---';
+                batchSelect.appendChild(placeholder);
+                
+                if (!selectedVal) return;
+                
+                originalOptions.forEach(opt => {
+                    if (!opt.value) return;
+                    // Check if batch text starts with the selected drug name
+                    if (opt.text.startsWith(selectedText)) {
+                        const newOpt = document.createElement('option');
+                        newOpt.value = opt.value;
+                        newOpt.textContent = opt.text;
+                        batchSelect.appendChild(newOpt);
+                    }
+                });
+            }
+            
+            drugSelect.addEventListener('change', updateBatches);
+            // Run once on load if drug is selected
+            if (drugSelect.value) {
+                updateBatches();
+            }
+        }
+    });
+</script>
+{% endblock %}
