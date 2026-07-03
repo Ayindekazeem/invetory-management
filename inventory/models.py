@@ -3,6 +3,16 @@ from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 import datetime
 
+class Location(models.Model):
+    name = models.CharField(max_length=150, unique=True)
+    is_central = models.BooleanField(default=False)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+
+    def __str__(self):
+        return self.name
+
+
 class CustomUser(AbstractUser):
     ROLE_CHOICES = (
         ('ADMIN', 'Administrator'),
@@ -11,6 +21,7 @@ class CustomUser(AbstractUser):
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='ADMIN')
     phone = models.CharField(max_length=20, blank=True, null=True)
+    location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
@@ -81,6 +92,7 @@ class Batch(models.Model):
     quantity_received = models.IntegerField()
     quantity_remaining = models.IntegerField()
     supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True, related_name='batches')
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, null=True, blank=True, related_name='batches')
 
     class Meta:
         verbose_name_plural = "Batches"
@@ -123,6 +135,7 @@ class StockTransaction(models.Model):
     transaction_date = models.DateTimeField(default=timezone.now)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='transactions')
     reference = models.CharField(max_length=255, blank=True, null=True)
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, null=True, blank=True, related_name='transactions')
 
     def __str__(self):
         return f"{self.get_transaction_type_display()} - {self.quantity} unit(s) of {self.batch.drug.drug_name} (Batch: {self.batch.batch_number})"
@@ -143,6 +156,43 @@ class Alert(models.Model):
     alert_date = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
     message = models.TextField()
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, null=True, blank=True, related_name='alerts')
 
     def __str__(self):
         return f"{self.get_alert_type_display()} - {self.status} ({self.alert_date.strftime('%Y-%m-%d')})"
+
+
+class StockTransfer(models.Model):
+    TRANSFER_TYPES = (
+        ('TRANSFER', 'Direct Transfer (Push)'),
+        ('REQUEST', 'Request Stock (Pull)'),
+    )
+    STATUS_CHOICES = (
+        ('PENDING_APPROVAL', 'Pending Approval'),
+        ('PENDING_RECEIPT', 'Pending Receipt (In-Transit)'),
+        ('ACCEPTED', 'Accepted'),
+        ('REJECTED', 'Rejected'),
+        ('CANCELLED', 'Cancelled'),
+    )
+
+    transfer_type = models.CharField(max_length=15, choices=TRANSFER_TYPES, default='TRANSFER')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING_RECEIPT')
+    from_location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='transfers_sent')
+    to_location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='transfers_received')
+    drug = models.ForeignKey(Drug, on_delete=models.CASCADE, related_name='transfers')
+
+    # Batch details for transit and target creation
+    batch_number = models.CharField(max_length=100, blank=True, null=True)
+    manufacturing_date = models.DateField(blank=True, null=True)
+    expiry_date = models.DateField(blank=True, null=True)
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True, related_name='transfers')
+
+    quantity = models.IntegerField()
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='transfers_created')
+    rejection_reason = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    reference = models.CharField(max_length=255, blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.get_transfer_type_display()} from {self.from_location} to {self.to_location} - {self.quantity} units of {self.drug.drug_name} (Status: {self.get_status_display()})"
