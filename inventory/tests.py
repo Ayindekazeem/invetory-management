@@ -4,17 +4,28 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 import datetime
 
-from .models import Drug, Batch, Supplier, StockTransaction, Alert
+from .models import Drug, Batch, Supplier, StockTransaction, Alert, StockTransfer
 from .utils import check_and_create_alerts, process_fefo_stock_out
+
+from .models import Location
 
 class InventorySystemTestCase(TestCase):
     def setUp(self):
-        # Create user
+        # Create Location
+        self.location = Location.objects.create(
+            name="Test Store",
+            is_central=True,
+            email="teststore@rxstock.com",
+            phone="+2348000000000"
+        )
+        
+        # Create user associated with the location
         User = get_user_model()
         self.user = User.objects.create_user(
             username='testpharmacist',
             password='password123',
-            role='PHARMACIST'
+            role='PHARMACIST',
+            location=self.location
         )
         
         # Create Supplier
@@ -45,7 +56,8 @@ class InventorySystemTestCase(TestCase):
             expiry_date=today + datetime.timedelta(days=15),
             quantity_received=20,
             quantity_remaining=20,
-            supplier=self.supplier
+            supplier=self.supplier,
+            location=self.location
         )
         
         # Batch 2 (expires in 100 days - Monitoring)
@@ -56,7 +68,8 @@ class InventorySystemTestCase(TestCase):
             expiry_date=today + datetime.timedelta(days=100),
             quantity_received=50,
             quantity_remaining=50,
-            supplier=self.supplier
+            supplier=self.supplier,
+            location=self.location
         )
 
     def test_batch_expiry_status_zone(self):
@@ -71,7 +84,8 @@ class InventorySystemTestCase(TestCase):
             manufacturing_date=datetime.date.today() - datetime.timedelta(days=100),
             expiry_date=datetime.date.today() - datetime.timedelta(days=5),
             quantity_received=10,
-            quantity_remaining=10
+            quantity_remaining=10,
+            location=self.location
         )
         self.assertEqual(expired_batch.expiry_status_zone, 'EXPIRED')
 
@@ -94,7 +108,7 @@ class InventorySystemTestCase(TestCase):
     def test_fefo_stock_out_distribution(self):
         """Verify that process_fefo_stock_out deducts from the soonest expiring batch first (FEFO)."""
         # Dispense 15 units. Since Batch 1 (expires in 15 days) has 20 units, it should cover it completely.
-        process_fefo_stock_out(self.drug, 15, self.user, "Dispense test 1")
+        process_fefo_stock_out(self.drug, 15, self.user, self.location, "Dispense test 1")
         
         # Reload from DB
         self.batch_critical.refresh_from_db()
@@ -105,7 +119,7 @@ class InventorySystemTestCase(TestCase):
         
         # Dispense another 10 units. This exceeds Batch 1's remaining (5 units).
         # It should deplete Batch 1 completely (5 units) and deduct the rest (5 units) from Batch 2.
-        process_fefo_stock_out(self.drug, 10, self.user, "Dispense test 2")
+        process_fefo_stock_out(self.drug, 10, self.user, self.location, "Dispense test 2")
         
         self.batch_critical.refresh_from_db()
         self.batch_monitoring.refresh_from_db()
@@ -116,7 +130,7 @@ class InventorySystemTestCase(TestCase):
     def test_fefo_stock_out_insufficient_stock(self):
         """Verify that process_fefo_stock_out raises ValidationError when trying to dispense more than available."""
         with self.assertRaises(ValidationError):
-            process_fefo_stock_out(self.drug, 100, self.user, "Too much")
+            process_fefo_stock_out(self.drug, 100, self.user, self.location, "Too much")
 
     def test_alerts_auto_generation(self):
         """Verify check_and_create_alerts correctly creates and resolves Alert instances."""
@@ -184,4 +198,335 @@ class InventorySystemTestCase(TestCase):
         self.client.force_login(admin_user)
         response = self.client.get('/users/')
         self.assertEqual(response.status_code, 200)
+
+    def test_download_drug_template(self):
+        """Test downloading the CSV drug upload template."""
+        self.client.force_login(self.user)
+        response = self.client.get('/drugs/template/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('drug_name,category,unit', response.content.decode('utf-8'))
+
+    def test_bulk_upload_drugs_csv_valid(self):
+        """Test bulk upload of valid CSV drug records."""
+        self.client.force_login(self.user)
+        
+        csv_content = (
+            "drug_name,category,unit,reorder_level,min_stock,max_stock,description\n"
+            "Paracetamol 500mg,tablet,pack,100,50,1000,Pain relief\n"
+            "Cough Syrup,syrup,bottle,30,10,200,Soothing formula\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("drugs.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post('/drugs/bulk-upload/', {'file': mock_file}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Drug.objects.filter(drug_name="Paracetamol 500mg").count(), 1)
+        self.assertEqual(Drug.objects.filter(drug_name="Cough Syrup").count(), 1)
+
+    def test_bulk_upload_drugs_csv_invalid(self):
+        """Test bulk upload of invalid CSV drug records fails validation."""
+        self.client.force_login(self.user)
+        
+        # Invalid: category is invalid and min_stock is not an integer
+        csv_content = (
+            "drug_name,category,unit,reorder_level,min_stock,max_stock,description\n"
+            "Invalid Drug,INVALID_CAT,Tablet,100,not-an-int,1000,Pain relief\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("drugs.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post('/drugs/bulk-upload/', {'file': mock_file})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('errors', response.context)
+        self.assertTrue(len(response.context['errors']) > 0)
+        self.assertEqual(Drug.objects.filter(drug_name="Invalid Drug").count(), 0)
+
+    def test_reports_dashboard_expiry_filters(self):
+        """Test that reports dashboard allows filtering upcoming expirations correctly."""
+        self.client.force_login(self.user)
+        
+        # 1. Default (180 days) - both batches should be included
+        response = self.client.get('/reports/')
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertIn(self.batch_critical, expiring)
+        self.assertIn(self.batch_monitoring, expiring)
+
+        # 2. Filter for next 30 days - only BATCH-CRT should be included
+        response = self.client.get('/reports/', {'expiry_days': '30'})
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertIn(self.batch_critical, expiring)
+        self.assertNotIn(self.batch_monitoring, expiring)
+
+        # 3. Custom date range filter - e.g. from 50 days to 150 days out
+        today = datetime.date.today()
+        start_date = (today + datetime.timedelta(days=50)).strftime('%Y-%m-%d')
+        end_date = (today + datetime.timedelta(days=150)).strftime('%Y-%m-%d')
+        response = self.client.get('/reports/', {
+            'expiry_days': 'custom',
+            'expiry_start': start_date,
+            'expiry_end': end_date
+        })
+        self.assertEqual(response.status_code, 200)
+        expiring = list(response.context['expiring_batches'])
+        self.assertNotIn(self.batch_critical, expiring)
+        self.assertIn(self.batch_monitoring, expiring)
+
+    def test_export_expiring_batches_csv_filters(self):
+        """Test exporting the filtered expiring batches as CSV file."""
+        self.client.force_login(self.user)
+        
+        # 1. Test Default (180 days) export
+        response = self.client.get('/reports/export/expiring-batches/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode('utf-8')
+        self.assertIn('BATCH-CRT', content)
+        self.assertIn('BATCH-MON', content)
+
+        # 2. Test 30 days export
+        response = self.client.get('/reports/export/expiring-batches/', {'expiry_days': '30'})
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('BATCH-CRT', content)
+        self.assertNotIn('BATCH-MON', content)
+
+        # 3. Test Custom date range export
+        today = datetime.date.today()
+        start_date = (today + datetime.timedelta(days=50)).strftime('%Y-%m-%d')
+        end_date = (today + datetime.timedelta(days=150)).strftime('%Y-%m-%d')
+        response = self.client.get('/reports/export/expiring-batches/', {
+            'expiry_days': 'custom',
+            'expiry_start': start_date,
+            'expiry_end': end_date
+        })
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertNotIn('BATCH-CRT', content)
+        self.assertIn('BATCH-MON', content)
+
+    def test_bulk_stock_in_csv_valid(self):
+        """Test valid bulk stock-in CSV creates batches, transactions, and redirects."""
+        self.client.force_login(self.user)
+        today = datetime.date.today()
+        mfg = (today - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+        exp = (today + datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+
+        csv_content = (
+            "drug_name,batch_number,manufacturing_date,expiry_date,quantity_received,supplier_name,reference\n"
+            f"Paracetamol 500mg,BULK-001,{mfg},{exp},200,Test Pharma Inc,INV-001\n"
+            f"Paracetamol 500mg,BULK-002,{mfg},{exp},100,,\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("stock_in.csv", csv_content.encode('utf-8'), content_type="text/csv")
+
+        response = self.client.post('/transactions/stock-in/bulk/', {'file': mock_file}, follow=True)
+        self.assertEqual(response.status_code, 200)
+
+        # Verify two new batches were created
+        self.assertTrue(self.drug.batches.filter(batch_number='BULK-001').exists())
+        self.assertTrue(self.drug.batches.filter(batch_number='BULK-002').exists())
+
+        # Verify stock transactions were created
+        batch1 = self.drug.batches.get(batch_number='BULK-001')
+        self.assertEqual(StockTransaction.objects.filter(batch=batch1, transaction_type='IN').count(), 1)
+
+        # Verify quantity is correct
+        self.assertEqual(batch1.quantity_remaining, 200)
+
+    def test_bulk_stock_in_csv_invalid(self):
+        """Test invalid bulk stock-in CSV shows errors and rolls back all changes."""
+        self.client.force_login(self.user)
+        today = datetime.date.today()
+        mfg = (today - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+        exp = (today + datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+
+        csv_content = (
+            "drug_name,batch_number,manufacturing_date,expiry_date,quantity_received\n"
+            # Row 2: valid
+            f"Paracetamol 500mg,INVALID-BATCH-A,{mfg},{exp},100\n"
+            # Row 3: drug not in catalog
+            f"NonExistentDrug XYZ,INVALID-BATCH-B,{mfg},{exp},50\n"
+        )
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        mock_file = SimpleUploadedFile("stock_in_bad.csv", csv_content.encode('utf-8'), content_type="text/csv")
+
+        response = self.client.post('/transactions/stock-in/bulk/', {'file': mock_file})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('errors', response.context)
+        self.assertTrue(len(response.context['errors']) > 0)
+
+        # Verify no batches were created (rollback)
+        self.assertFalse(self.drug.batches.filter(batch_number='INVALID-BATCH-A').exists())
+
+    def test_bulk_stock_in_template_download(self):
+        """Test that the stock-in CSV template is downloadable."""
+        self.client.force_login(self.user)
+        response = self.client.get('/transactions/stock-in/template/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode('utf-8')
+        self.assertIn('drug_name', content)
+        self.assertIn('batch_number', content)
+        self.assertIn('manufacturing_date', content)
+        self.assertIn('expiry_date', content)
+        self.assertIn('quantity_received', content)
+
+    def test_location_switcher(self):
+        """Test switching location context for an admin user."""
+        admin_user = get_user_model().objects.create_user(
+            username='admin_test_switcher',
+            password='password123',
+            role='ADMIN'
+        )
+        self.client.force_login(admin_user)
+        # Create another location
+        other_loc = Location.objects.create(name="Second Floor Pharmacy", email="second@rxstock.com")
+        
+        response = self.client.get(f'/locations/switch/{other_loc.id}/')
+        self.assertEqual(response.status_code, 302)
+        # Verify active_location_id in session
+        self.assertEqual(self.client.session['active_location_id'], other_loc.id)
+
+    def test_push_transfer_flow(self):
+        """Test push transfer (send stock from one location to another, then accept/reject it)."""
+        self.client.force_login(self.user)
+        other_loc = Location.objects.create(name="Second Floor Pharmacy", email="second@rxstock.com")
+        
+        # Dispatch transfer from setup location (Test Store) to other_loc
+        transfer = StockTransfer.objects.create(
+            transfer_type='TRANSFER',
+            status='PENDING_RECEIPT',
+            from_location=self.location,
+            to_location=other_loc,
+            drug=self.drug,
+            batch_number=self.batch_monitoring.batch_number,
+            manufacturing_date=self.batch_monitoring.manufacturing_date,
+            expiry_date=self.batch_monitoring.expiry_date,
+            supplier=self.supplier,
+            quantity=10,
+            created_by=self.user
+        )
+        
+        # Deduct quantity from batch_monitoring to simulate dispatching
+        self.batch_monitoring.quantity_remaining -= 10
+        self.batch_monitoring.save()
+        
+        # Log in as user associated with other_loc (let's simulate other_loc context)
+        other_user = get_user_model().objects.create_user(
+            username='other_pharmacist',
+            password='password123',
+            role='PHARMACIST',
+            location=other_loc
+        )
+        self.client.force_login(other_user)
+        
+        # Accept transfer
+        response = self.client.post(f'/transfers/accept/{transfer.id}/')
+        self.assertEqual(response.status_code, 302)
+        
+        # Verify status is ACCEPTED
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, 'ACCEPTED')
+        
+        # Verify batch is created at other_loc with correct quantity
+        other_batch = Batch.objects.get(drug=self.drug, location=other_loc, batch_number=self.batch_monitoring.batch_number)
+        self.assertEqual(other_batch.quantity_remaining, 10)
+
+    def test_pull_request_flow(self):
+        """Test pull request flow (request stock, supply/dispatch it from source, then accept it at destination)."""
+        other_loc = Location.objects.create(name="Sixth Floor Pharmacy", email="sixth@rxstock.com")
+        other_user = get_user_model().objects.create_user(
+            username='sixth_pharmacist',
+            password='password123',
+            role='PHARMACIST',
+            location=other_loc
+        )
+        self.client.force_login(other_user)
+        
+        # Sixth Floor requests stock from Test Store (self.location)
+        transfer = StockTransfer.objects.create(
+            transfer_type='REQUEST',
+            status='PENDING_APPROVAL',
+            from_location=self.location, # supplying store
+            to_location=other_loc,       # requesting store
+            drug=self.drug,
+            quantity=15,
+            created_by=other_user
+        )
+        
+        # Now log in as Test Store pharmacist to approve/dispatch the request
+        self.client.force_login(self.user)
+        
+        # Fulfill request by dispatching from BATCH-MON
+        response = self.client.post(f'/transfers/approve/{transfer.id}/', {'batch': self.batch_monitoring.id})
+        self.assertEqual(response.status_code, 302)
+        
+        # Verify transfer status is now PENDING_RECEIPT
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, 'PENDING_RECEIPT')
+        self.assertEqual(transfer.batch_number, self.batch_monitoring.batch_number)
+        
+        # Stock at source (BATCH-MON) should be reduced
+        self.batch_monitoring.refresh_from_db()
+        self.assertEqual(self.batch_monitoring.quantity_remaining, 35) # 50 - 15 = 35
+        
+        # Now log back in as Sixth Floor pharmacist to receive/accept it
+        self.client.force_login(other_user)
+        
+        # It should show up in Sixth Floor's incoming transfers view context
+        # (which verifies our fix in transfer_list view query)
+        response = self.client.get('/transfers/')
+        self.assertIn(transfer, response.context['incoming_transfers'])
+        
+        # Accept the stock
+        response = self.client.post(f'/transfers/accept/{transfer.id}/')
+        self.assertEqual(response.status_code, 302)
+        
+        # Transfer status should be ACCEPTED
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, 'ACCEPTED')
+        
+        # Stock should be created at Sixth Floor
+        sixth_batch = Batch.objects.get(drug=self.drug, location=other_loc, batch_number=self.batch_monitoring.batch_number)
+        self.assertEqual(sixth_batch.quantity_remaining, 15)
+
+    def test_non_admin_user_location_lock_and_validation(self):
+        """Test that non-admin users cannot switch location, and forms require them to have a location."""
+        # 1. Test Form validation (non-admin must have location)
+        from inventory.forms import CustomUserForm
+        form_data = {
+            'username': 'new_pharmacist',
+            'first_name': 'Test',
+            'last_name': 'Pharm',
+            'email': 'pharm@test.com',
+            'phone': '12345678',
+            'role': 'PHARMACIST',
+            'location': '', # blank
+            'password': 'password123'
+        }
+        form = CustomUserForm(data=form_data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('location', form.errors)
+        
+        # Admin can be created without a location
+        form_data_admin = form_data.copy()
+        form_data_admin['role'] = 'ADMIN'
+        form_data_admin['username'] = 'new_admin'
+        form = CustomUserForm(data=form_data_admin)
+        self.assertTrue(form.is_valid())
+
+        # 2. Test Switch endpoint restriction (non-admin cannot switch)
+        other_loc = Location.objects.create(name="Another Floor", email="another@rxstock.com")
+        self.client.force_login(self.user) # Test setup user is a pharmacist
+        response = self.client.get(f'/locations/switch/{other_loc.id}/')
+        self.assertEqual(response.status_code, 302)
+        # Session shouldn't update
+        self.assertNotIn('active_location_id', self.client.session)
+
+
+
+
 

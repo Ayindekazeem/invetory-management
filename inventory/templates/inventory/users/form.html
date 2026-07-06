@@ -22,7 +22,7 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <!-- Username -->
                 <div>
-                    <label for="{{ form.username.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Usernames</label>
+                    <label for="{{ form.username.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Username</label>
                     {{ form.username }}
                     {% if form.username.errors %}
                     <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.username.errors.0 }}</p>
@@ -82,13 +82,26 @@
                 </div>
             </div>
 
-            <!-- Role Selection -->
-            <div class="border-t border-slate-100 dark:border-slate-800 pt-5">
-                <label for="{{ form.role.id_for_label }}" class="block text-xs font-semibold text-slate-505 dark:text-slate-400 uppercase tracking-wider mb-2">System Access Role</label>
-                {{ form.role }}
-                {% if form.role.errors %}
-                <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.role.errors.0 }}</p>
-                {% endif %}
+            <!-- Role & Location Selection -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 border-t border-slate-100 dark:border-slate-800 pt-5">
+                <!-- Role -->
+                <div>
+                    <label for="{{ form.role.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">System Access Role</label>
+                    {{ form.role }}
+                    {% if form.role.errors %}
+                    <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.role.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Location -->
+                <div>
+                    <label for="{{ form.location.id_for_label }}" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Assigned Location / Store</label>
+                    {{ form.location }}
+                    {% if form.location.errors %}
+                    <p class="text-xs text-rose-605 dark:text-rose-400 mt-1">{{ form.location.errors.0 }}</p>
+                    {% endif %}
+                    <p class="text-[10px] text-slate-400 dark:text-slate-500 mt-1">Required for non-admin users. Locks user access to this floor/store room.</p>
+                </div>
             </div>
 
             <!-- Submit buttons -->

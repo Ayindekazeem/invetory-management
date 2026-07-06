@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm
-from .models import Drug, Batch, Supplier, StockTransaction, CustomUser
+from .models import Drug, Batch, Supplier, StockTransaction, CustomUser, Location
 
 class TailwindFormMixin:
     """Mixin to inject consistent, premium Tailwind CSS classes into form fields."""
@@ -101,7 +101,7 @@ class StockInForm(TailwindFormMixin, forms.Form):
 class StockOutForm(TailwindFormMixin, forms.Form):
     """
     Form to record Stock-Out. Supports FEFO (auto-deducting oldest expiring batches)
-    or selecting a specific batch.
+    or selecting a specific batch, filtered by location.
     """
     OUT_METHOD_CHOICES = (
         ('FEFO', 'First-Expired, First-Out (Auto FEFO)'),
@@ -114,19 +114,25 @@ class StockOutForm(TailwindFormMixin, forms.Form):
     reference = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'placeholder': 'e.g. Dispensed to Ward B, Patient X'}))
 
     def __init__(self, *args, **kwargs):
+        self.location = kwargs.pop('location', None)
         super().__init__(*args, **kwargs)
-        # Dynamic Batch queryset population based on selected drug
+        
+        # Dynamic Batch queryset population based on selected drug and location
+        batch_qs = Batch.objects.filter(quantity_remaining__gt=0)
+        if self.location:
+            batch_qs = batch_qs.filter(location=self.location)
+
         if 'drug' in self.data:
             try:
                 drug_id = int(self.data.get('drug'))
-                self.fields['batch'].queryset = Batch.objects.filter(drug_id=drug_id, quantity_remaining__gt=0).order_by('expiry_date')
+                self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
             except (ValueError, TypeError):
                 pass
         elif self.initial.get('drug'):
             drug_id = self.initial.get('drug').id
-            self.fields['batch'].queryset = Batch.objects.filter(drug_id=drug_id, quantity_remaining__gt=0).order_by('expiry_date')
+            self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
         else:
-            self.fields['batch'].queryset = Batch.objects.filter(quantity_remaining__gt=0).order_by('expiry_date')
+            self.fields['batch'].queryset = batch_qs.order_by('expiry_date')
 
     def clean(self):
         cleaned_data = super().clean()
@@ -140,11 +146,14 @@ class StockOutForm(TailwindFormMixin, forms.Form):
         elif method == 'BATCH' and not batch:
             self.add_error('batch', 'Please select a specific batch.')
 
-        if quantity:
+        if quantity and self.location:
             if method == 'FEFO' and drug:
-                total_stock = drug.total_stock
+                # Calculate stock at active location
+                total_stock = Batch.objects.filter(drug=drug, location=self.location, quantity_remaining__gt=0).aggregate(
+                    forms.models.Sum('quantity_remaining')
+                )['quantity_remaining__sum'] or 0
                 if total_stock < quantity:
-                    raise forms.ValidationError(f"Insufficient stock. Requested: {quantity}, Available: {total_stock} units.")
+                    raise forms.ValidationError(f"Insufficient stock at {self.location.name}. Requested: {quantity}, Available: {total_stock} units.")
             elif method == 'BATCH' and batch:
                 if batch.quantity_remaining < quantity:
                     raise forms.ValidationError(f"Insufficient stock in Batch {batch.batch_number}. Requested: {quantity}, Available: {batch.quantity_remaining} units.")
@@ -160,7 +169,7 @@ class CustomUserForm(TailwindFormMixin, forms.ModelForm):
 
     class Meta:
         model = CustomUser
-        fields = ['username', 'first_name', 'last_name', 'email', 'phone', 'role', 'password']
+        fields = ['username', 'first_name', 'last_name', 'email', 'phone', 'role', 'location', 'password']
         widgets = {
             'username': forms.TextInput(attrs={'placeholder': 'Enter unique username'}),
             'first_name': forms.TextInput(attrs={'placeholder': 'First Name'}),
@@ -171,10 +180,21 @@ class CustomUserForm(TailwindFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['location'].empty_label = "No Location (All Access / Switchable)"
         # If this is a new user, password is required
         if not self.instance.pk:
             self.fields['password'].required = True
             self.fields['password'].widget.attrs['placeholder'] = '••••••••'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        role = cleaned_data.get('role')
+        location = cleaned_data.get('location')
+        
+        if role and role != 'ADMIN' and not location:
+            self.add_error('location', "Non-admin users must be assigned to a specific location.")
+            
+        return cleaned_data
 
     def save(self, commit=True):
         user = super().save(commit=False)
@@ -184,3 +204,70 @@ class CustomUserForm(TailwindFormMixin, forms.ModelForm):
         if commit:
             user.save()
         return user
+
+
+class BulkUploadForm(TailwindFormMixin, forms.Form):
+    file = forms.FileField(
+        label="Select File",
+    )
+
+    def clean_file(self):
+        uploaded_file = self.cleaned_data.get('file')
+        if uploaded_file:
+            name = uploaded_file.name.lower()
+            if not (name.endswith('.csv') or name.endswith('.xlsx')):
+                raise forms.ValidationError("Unsupported file extension. Only .csv and .xlsx files are allowed.")
+        return uploaded_file
+
+
+class LocationForm(TailwindFormMixin, forms.ModelForm):
+    class Meta:
+        model = Location
+        fields = ['name', 'is_central', 'email', 'phone']
+        widgets = {
+            'name': forms.TextInput(attrs={'placeholder': 'e.g. First Floor Pharmacy'}),
+            'email': forms.EmailInput(attrs={'placeholder': 'e.g. pharmacy1@hospital.com'}),
+            'phone': forms.TextInput(attrs={'placeholder': 'e.g. +234...'}),
+        }
+
+
+class StockTransferForm(TailwindFormMixin, forms.Form):
+    to_location = forms.ModelChoiceField(queryset=Location.objects.none(), empty_label="Select Destination Store")
+    drug = forms.ModelChoiceField(queryset=Drug.objects.all(), empty_label="Select Drug")
+    batch = forms.ModelChoiceField(queryset=Batch.objects.none(), empty_label="Select Batch (Choose drug first)")
+    quantity = forms.IntegerField(min_value=1, widget=forms.NumberInput(attrs={'placeholder': 'Quantity to transfer'}))
+    reference = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'placeholder': 'e.g. Ref/Notes'}))
+
+    def __init__(self, *args, **kwargs):
+        self.location = kwargs.pop('location', None)
+        super().__init__(*args, **kwargs)
+        if self.location:
+            self.fields['to_location'].queryset = Location.objects.exclude(id=self.location.id).order_by('name')
+            
+            batch_qs = Batch.objects.filter(location=self.location, quantity_remaining__gt=0)
+            if 'drug' in self.data:
+                try:
+                    drug_id = int(self.data.get('drug'))
+                    self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
+                except (ValueError, TypeError):
+                    pass
+            elif self.initial.get('drug'):
+                drug_id = self.initial.get('drug').id
+                self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
+            else:
+                self.fields['batch'].queryset = batch_qs.order_by('expiry_date')
+
+
+class StockRequestForm(TailwindFormMixin, forms.Form):
+    from_location = forms.ModelChoiceField(queryset=Location.objects.none(), empty_label="Select Supplying Store")
+    drug = forms.ModelChoiceField(queryset=Drug.objects.all(), empty_label="Select Drug")
+    quantity = forms.IntegerField(min_value=1, widget=forms.NumberInput(attrs={'placeholder': 'Quantity to request'}))
+    reference = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'placeholder': 'Reason/Notes'}))
+
+    def __init__(self, *args, **kwargs):
+        self.location = kwargs.pop('location', None)
+        super().__init__(*args, **kwargs)
+        if self.location:
+            self.fields['from_location'].queryset = Location.objects.exclude(id=self.location.id).order_by('name')
+
+
