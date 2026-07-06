@@ -1,0 +1,78 @@
+{% extends 'inventory/base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+        
+        <!-- Form Header -->
+        <div class="px-6 py-4 border-b border-slate-100 dark:border-slate-850 bg-slate-50/50 dark:bg-slate-950/20">
+            <h2 class="text-sm font-bold text-slate-850 dark:text-white">Pull Stock Request Details</h2>
+            <p class="text-xs text-slate-400 mt-0.5">Request stock from another store or Central Store to be transferred to <strong>{{ active_location.name }}</strong>. The supplying store must review and approve this dispatch request.</p>
+        </div>
+        
+        <form method="POST" class="p-6 space-y-4">
+            {% csrf_token %}
+            
+            {% if form.non_field_errors %}
+            <div class="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-xs text-rose-600 dark:text-rose-400">
+                {% for err in form.non_field_errors %}
+                <p>{{ err }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Form fields -->
+            <div class="space-y-4">
+                <!-- Source Store -->
+                <div>
+                    <label for="{{ form.from_location.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Request From Store (Source)</label>
+                    {{ form.from_location }}
+                    {% if form.from_location.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.from_location.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Drug Selection -->
+                <div>
+                    <label for="{{ form.drug.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Select Drug</label>
+                    {{ form.drug }}
+                    {% if form.drug.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.drug.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Quantity -->
+                <div>
+                    <label for="{{ form.quantity.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Request Quantity</label>
+                    {{ form.quantity }}
+                    {% if form.quantity.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.quantity.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- Reference / Reason -->
+                <div>
+                    <label for="{{ form.reference.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Notes / Requisition Reference (Optional)</label>
+                    {{ form.reference }}
+                    {% if form.reference.errors %}
+                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.reference.errors.0 }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-850">
+                <a href="{% url 'transfer_list' %}" class="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors">
+                    Cancel
+                </a>
+                <button type="submit" class="rounded-lg bg-teal-600 hover:bg-teal-500 px-5 py-2 text-xs font-semibold text-white transition-colors shadow">
+                    Submit Requisition
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

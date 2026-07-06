@@ -65,19 +65,19 @@
         <!-- Right: Current Inventory Health Status -->
         <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
             <div>
-                <h3 class="font-bold text-slate-850 dark:text-white text-sm border-b border-slate-100 dark:border-slate-850 pb-3 mb-4">Stock Health Indicators</h3>
+                <h3 class="font-bold text-slate-850 dark:text-white text-sm border-b border-slate-100 dark:border-slate-850 pb-3 mb-4">Stock Health: {{ active_location.name }}</h3>
                 
                 <div class="space-y-4">
                     <!-- Total Available Stock -->
                     <div class="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-3.5 rounded-xl border border-slate-200 dark:border-slate-850">
                         <div>
-                            <span class="text-xs text-slate-500 block">Total Remaining Units</span>
-                            <span class="text-xl font-bold text-slate-850 dark:text-white mt-1 block font-mono">{{ drug.total_stock }}</span>
+                            <span class="text-xs text-slate-505 block">Location Remaining Units</span>
+                            <span class="text-xl font-bold text-slate-850 dark:text-white mt-1 block font-mono">{{ stock_at_loc }} units</span>
                         </div>
                         <div>
-                            {% if drug.total_stock == 0 %}
+                            {% if stock_at_loc == 0 %}
                             <span class="h-3 w-3 rounded-full bg-rose-500 animate-ping block"></span>
-                            {% elif drug.is_low_stock %}
+                            {% elif stock_at_loc <= drug.reorder_level %}
                             <span class="h-3 w-3 rounded-full bg-amber-500 block"></span>
                             {% else %}
                             <span class="h-3 w-3 rounded-full bg-emerald-500 block"></span>
@@ -87,13 +87,13 @@
 
                     <!-- Status Text -->
                     <div class="text-xs">
-                        {% if drug.total_stock == 0 %}
+                        {% if stock_at_loc == 0 %}
                         <div class="text-rose-700 bg-rose-50 border border-rose-200 p-3 rounded-lg dark:text-rose-400 dark:bg-rose-500/10 dark:border-rose-500/20 leading-relaxed">
-                            <span class="font-bold">CRITICAL:</span> Out of Stock. Patients cannot be dispensed this drug. Please process a Stock-In immediately.
+                            <span class="font-bold">CRITICAL:</span> Out of Stock. Patients cannot be dispensed this drug at this floor.
                         </div>
-                        {% elif drug.is_low_stock %}
+                        {% elif stock_at_loc <= drug.reorder_level %}
                         <div class="text-amber-700 bg-amber-50 border border-amber-200 p-3 rounded-lg dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/20 leading-relaxed">
-                            <span class="font-bold">WARNING:</span> Low Stock Level. Current quantity ({{ drug.total_stock }}) is below reorder threshold ({{ drug.reorder_level }}).
+                            <span class="font-bold">WARNING:</span> Low Stock Level. Quantity is below reorder threshold ({{ drug.reorder_level }}).
                         </div>
                         {% else %}
                         <div class="text-emerald-700 bg-emerald-50 border border-emerald-200 p-3 rounded-lg dark:text-emerald-400 dark:bg-emerald-500/10 dark:border-emerald-500/20 leading-relaxed">
@@ -111,61 +111,93 @@
 
     </div>
 
-    <!-- Active Batches Section -->
-    <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-        <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
-            <h3 class="font-bold text-slate-850 dark:text-white text-base">Active Drug Batches (FEFO Tracked)</h3>
+    <!-- Active Batches Section & Other Locations -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left: Active Batches (2/3 width) -->
+        <div class="lg:col-span-2 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xl flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
+                <h3 class="font-bold text-slate-850 dark:text-white text-base">Active Drug Batches at {{ active_location.name }}</h3>
+            </div>
+
+            <div class="overflow-x-auto flex-1">
+                <table class="w-full text-left text-sm text-slate-650 dark:text-slate-300">
+                    <thead class="bg-slate-50 dark:bg-slate-950/40 text-xs uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                            <th class="px-6 py-3.5">Batch Number</th>
+                            <th class="px-6 py-3.5">Supplier</th>
+                            <th class="px-6 py-3.5">Mfg. Date</th>
+                            <th class="px-6 py-3.5">Expiry Date</th>
+                            <th class="px-6 py-3.5 text-center">Remaining / Received</th>
+                            <th class="px-6 py-3.5 text-center">Expiry Status</th>
+                            <th class="px-6 py-3.5 text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-850">
+                        {% for batch in batches %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-850/40 transition-colors {% if batch.quantity_remaining == 0 %} opacity-50 bg-slate-100 dark:bg-slate-950/10 {% endif %}">
+                            <td class="px-6 py-4 font-bold text-slate-850 dark:text-white font-mono text-xs">{{ batch.batch_number }}</td>
+                            <td class="px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ batch.supplier.supplier_name|default:"Unknown Supplier" }}</td>
+                            <td class="px-6 py-4 font-mono text-xs text-slate-500 dark:text-slate-400">{{ batch.manufacturing_date|date:"Y-m-d" }}</td>
+                            <td class="px-6 py-4 font-mono text-xs text-slate-500 dark:text-slate-400">{{ batch.expiry_date|date:"Y-m-d" }}</td>
+                            <td class="px-6 py-4 text-center text-xs">
+                                <span class="font-bold text-slate-800 dark:text-white font-mono">{{ batch.quantity_remaining }}</span>
+                                <span class="text-slate-400 dark:text-slate-655">/ {{ batch.quantity_received }}</span>
+                            </td>
+                            <td class="px-6 py-4 text-center">
+                                {% if batch.expiry_status_zone == 'EXPIRED' %}
+                                <span class="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/20 px-2.5 py-0.5 text-xs font-bold text-rose-600 dark:text-rose-505">EXPIRED</span>
+                                {% elif batch.expiry_status_zone == 'CRITICAL' %}
+                                <span class="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 dark:bg-red-650/10 dark:border-red-500/20 px-2.5 py-0.5 text-xs font-bold text-red-600 dark:text-red-500 animate-pulse">Critical (0-30 days)</span>
+                                {% elif batch.expiry_status_zone == 'PLANNING' %}
+                                <span class="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-500">Planning (31-90 days)</span>
+                                {% elif batch.expiry_status_zone == 'MONITORING' %}
+                                <span class="inline-flex items-center rounded-full bg-blue-50 border border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/20 px-2.5 py-0.5 text-xs font-bold text-blue-600 dark:text-blue-500">Monitoring (91-180 days)</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-50 border border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-450">Safe (180+ days)</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 text-center text-xs">
+                                <a href="{% url 'batch_edit' batch.pk %}" class="text-slate-550 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white mr-3">Edit Batch</a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="px-6 py-8 text-center text-slate-400 dark:text-slate-500">No active batches for this drug at {{ active_location.name }}.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
-        <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm text-slate-650 dark:text-slate-300">
-                <thead class="bg-slate-50 dark:bg-slate-950/40 text-xs uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
-                    <tr>
-                        <th class="px-6 py-3.5">Batch Number</th>
-                        <th class="px-6 py-3.5">Supplier</th>
-                        <th class="px-6 py-3.5">Mfg. Date</th>
-                        <th class="px-6 py-3.5">Expiry Date</th>
-                        <th class="px-6 py-3.5 text-center">Remaining / Received</th>
-                        <th class="px-6 py-3.5 text-center">Expiry Alert Status</th>
-                        <th class="px-6 py-3.5 text-center">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-850">
-                    {% for batch in batches %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-850/40 transition-colors {% if batch.quantity_remaining == 0 %} opacity-50 bg-slate-100 dark:bg-slate-950/10 {% endif %}">
-                        <td class="px-6 py-4 font-bold text-slate-850 dark:text-white font-mono text-xs">{{ batch.batch_number }}</td>
-                        <td class="px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ batch.supplier.supplier_name|default:"Unknown Supplier" }}</td>
-                        <td class="px-6 py-4 font-mono text-xs text-slate-500 dark:text-slate-400">{{ batch.manufacturing_date|date:"Y-m-d" }}</td>
-                        <td class="px-6 py-4 font-mono text-xs text-slate-500 dark:text-slate-400">{{ batch.expiry_date|date:"Y-m-d" }}</td>
-                        <td class="px-6 py-4 text-center text-xs">
-                            <span class="font-bold text-slate-800 dark:text-white font-mono">{{ batch.quantity_remaining }}</span>
-                            <span class="text-slate-400 dark:text-slate-650">/ {{ batch.quantity_received }}</span>
-                        </td>
-                        <td class="px-6 py-4 text-center">
-                            {% if batch.expiry_status_zone == 'EXPIRED' %}
-                            <span class="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/20 px-2.5 py-0.5 text-xs font-bold text-rose-600 dark:text-rose-500">EXPIRED</span>
-                            {% elif batch.expiry_status_zone == 'CRITICAL' %}
-                            <span class="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 dark:bg-red-650/10 dark:border-red-500/20 px-2.5 py-0.5 text-xs font-bold text-red-600 dark:text-red-500 animate-pulse">Critical (0-30 days)</span>
-                            {% elif batch.expiry_status_zone == 'PLANNING' %}
-                            <span class="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-500">Planning (31-90 days)</span>
-                            {% elif batch.expiry_status_zone == 'MONITORING' %}
-                            <span class="inline-flex items-center rounded-full bg-blue-50 border border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/20 px-2.5 py-0.5 text-xs font-bold text-blue-600 dark:text-blue-500">Monitoring (91-180 days)</span>
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-emerald-50 border border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">Safe (180+ days)</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 text-center text-xs">
-                            <a href="{% url 'batch_edit' batch.pk %}" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white mr-3">Edit Batch</a>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="7" class="px-6 py-8 text-center text-slate-400 dark:text-slate-500">No active batches for this drug.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <!-- Right: Other Stores Stock (1/3 width) -->
+        <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+             <h3 class="font-bold text-slate-850 dark:text-white text-sm border-b border-slate-100 dark:border-slate-850 pb-3">Stock in Other Floors</h3>
+             <div class="divide-y divide-slate-100 dark:divide-slate-850">
+                 {% for os in other_stocks %}
+                 <div class="py-3 flex items-center justify-between text-xs">
+                     <div>
+                         <span class="font-semibold text-slate-700 dark:text-slate-350">{{ os.location.name }}</span>
+                         {% if os.location.is_central %}
+                         <span class="block text-[9px] text-teal-605 dark:text-teal-400 font-bold uppercase tracking-wider">Central</span>
+                         {% endif %}
+                     </div>
+                     <div class="flex items-center gap-3">
+                         <span class="font-bold font-mono text-slate-900 dark:text-white {% if os.quantity == 0 %} text-slate-400 {% endif %}">{{ os.quantity }} units</span>
+                         {% if os.quantity > 0 %}
+                         <a href="{% url 'request_create' %}?from_location_id={{ os.location.id }}&drug_id={{ drug.id }}" class="rounded bg-teal-500/10 hover:bg-teal-500/20 px-2 py-1 text-[10px] font-bold text-teal-600 dark:text-teal-450 border border-teal-500/20 transition-colors">
+                             Request Transfer
+                         </a>
+                         {% endif %}
+                     </div>
+                 </div>
+                 {% empty %}
+                 <div class="py-4 text-center text-slate-400 text-xs">No other store locations found.</div>
+                 {% endfor %}
+             </div>
         </div>
+
     </div>
 
 </div>
