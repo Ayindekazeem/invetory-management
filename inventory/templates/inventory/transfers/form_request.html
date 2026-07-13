@@ -4,7 +4,7 @@
 {% block page_title %}{{ title }}{% endblock %}
 
 {% block content %}
-<div class="max-w-2xl mx-auto">
+<div class="max-w-4xl mx-auto">
     <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl shadow-xl overflow-hidden">
         
         <!-- Form Header -->
@@ -13,7 +13,17 @@
             <p class="text-xs text-slate-400 mt-0.5">Request stock from another store or Central Store to be transferred to <strong>{{ active_location.name }}</strong>. The supplying store must review and approve this dispatch request.</p>
         </div>
         
-        <form method="POST" class="p-6 space-y-4">
+        <!-- JSON Data Source Scripts -->
+        <script type="application/json" id="initial-items-data">
+            {{ initial_items_json|safe }}
+        </script>
+        <script type="application/json" id="drugs-data">
+            {{ drugs_json|safe }}
+        </script>
+
+        <form method="POST" class="p-6 space-y-6"
+              x-data="setupForm()"
+              x-init="init()">
             {% csrf_token %}
             
             {% if form.non_field_errors %}
@@ -24,32 +34,14 @@
             </div>
             {% endif %}
 
-            <!-- Form fields -->
-            <div class="space-y-4">
+            <!-- Header fields (Location & Reference) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <!-- Source Store -->
                 <div>
                     <label for="{{ form.from_location.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Request From Store (Source)</label>
                     {{ form.from_location }}
                     {% if form.from_location.errors %}
                     <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.from_location.errors.0 }}</p>
-                    {% endif %}
-                </div>
-
-                <!-- Drug Selection -->
-                <div>
-                    <label for="{{ form.drug.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Select Drug</label>
-                    {{ form.drug }}
-                    {% if form.drug.errors %}
-                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.drug.errors.0 }}</p>
-                    {% endif %}
-                </div>
-
-                <!-- Quantity -->
-                <div>
-                    <label for="{{ form.quantity.id_for_label }}" class="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Request Quantity</label>
-                    {{ form.quantity }}
-                    {% if form.quantity.errors %}
-                    <p class="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">{{ form.quantity.errors.0 }}</p>
                     {% endif %}
                 </div>
 
@@ -63,16 +55,110 @@
                 </div>
             </div>
 
+            <!-- Items Section -->
+            <div class="border-t border-slate-100 dark:border-slate-800 pt-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xs font-bold text-slate-800 dark:text-white uppercase tracking-wider">Requested Drugs</h3>
+                    <span class="text-[10px] bg-teal-500/10 text-teal-600 dark:text-teal-400 font-bold px-2 py-0.5 rounded-full" x-text="items.length + ' item(s)'"></span>
+                </div>
+
+                <!-- Hidden Input to post JSON to Backend -->
+                <input type="hidden" name="items_json" :value="JSON.stringify(items)">
+
+                <div class="space-y-3">
+                    <!-- Column Headers (Visible only on medium screens and up) -->
+                    <div class="hidden md:flex items-center gap-4 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <div class="flex-1">Drug Name</div>
+                        <div class="w-36">Quantity</div>
+                        <div class="w-10"></div>
+                    </div>
+
+                    <!-- Dynamic Rows -->
+                    <template x-for="(item, index) in items" :key="index">
+                        <div class="flex flex-col md:flex-row md:items-center gap-3 bg-slate-50 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/60 dark:border-slate-800/80">
+                            <!-- Drug Select -->
+                            <div class="flex-1">
+                                <label class="block md:hidden text-[10px] font-semibold text-slate-450 mb-1">Drug Name</label>
+                                <select x-model="item.drug_id" class="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-4 py-2 focus:outline-none focus:border-teal-600 focus:ring-1 focus:ring-teal-600 dark:bg-slate-800 dark:border-slate-700 dark:text-white dark:focus:border-teal-500 dark:focus:ring-teal-500 transition duration-150 ease-in-out placeholder-slate-400 dark:placeholder-slate-500 text-sm">
+                                    <option value="">--- Select Drug ---</option>
+                                    <template x-for="d in allDrugs" :key="d.id">
+                                        <option :value="d.id" x-text="d.name" :selected="item.drug_id == d.id"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            
+                            <!-- Quantity -->
+                            <div class="w-full md:w-36">
+                                <label class="block md:hidden text-[10px] font-semibold text-slate-450 mb-1">Quantity</label>
+                                <input type="number" x-model.number="item.quantity" min="1" class="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-4 py-2 focus:outline-none focus:border-teal-600 focus:ring-1 focus:ring-teal-600 dark:bg-slate-800 dark:border-slate-700 dark:text-white dark:focus:border-teal-500 dark:focus:ring-teal-500 transition duration-150 ease-in-out placeholder-slate-400 dark:placeholder-slate-500 text-sm" placeholder="Quantity">
+                            </div>
+                            
+                            <!-- Delete Button -->
+                            <div class="flex justify-end pt-2 md:pt-0">
+                                <button type="button" @click="removeItem(index)" class="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-450 border border-rose-500/20 transition-colors" title="Remove row">
+                                    <svg class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Add Row Button -->
+                <div class="mt-4">
+                    <button type="button" @click="addItem()" class="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-dashed border-teal-500/30 hover:border-teal-500 bg-teal-500/5 hover:bg-teal-500/10 text-teal-650 dark:text-teal-400 text-xs font-semibold transition-colors">
+                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                        </svg>
+                        Add Another Drug
+                    </button>
+                </div>
+            </div>
+
             <!-- Action buttons -->
-            <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-850">
+            <div class="flex items-center justify-end gap-3 pt-6 border-t border-slate-100 dark:border-slate-850">
                 <a href="{% url 'transfer_list' %}" class="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors">
                     Cancel
                 </a>
-                <button type="submit" class="rounded-lg bg-teal-600 hover:bg-teal-500 px-5 py-2 text-xs font-semibold text-white transition-colors shadow">
+                <button type="submit" class="rounded-lg bg-teal-600 hover:bg-teal-500 px-5 py-2.5 text-xs font-semibold text-white transition-colors shadow">
                     Submit Requisition
                 </button>
             </div>
         </form>
     </div>
 </div>
+
+<script>
+    function setupForm() {
+        return {
+            items: [],
+            allDrugs: [],
+            init() {
+                try {
+                    this.items = JSON.parse(document.getElementById('initial-items-data').textContent.trim() || '[]');
+                } catch(e) {
+                    this.items = [];
+                }
+                try {
+                    this.allDrugs = JSON.parse(document.getElementById('drugs-data').textContent.trim() || '[]');
+                } catch(e) {
+                    this.allDrugs = [];
+                }
+                if (this.items.length === 0) {
+                    this.addItem();
+                }
+            },
+            addItem() {
+                this.items.push({ drug_id: '', quantity: 1 });
+            },
+            removeItem(index) {
+                this.items.splice(index, 1);
+                if (this.items.length === 0) {
+                    this.addItem();
+                }
+            }
+        };
+    }
+</script>
 {% endblock %}

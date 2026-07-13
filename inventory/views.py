@@ -10,6 +10,7 @@ from django.utils import timezone
 
 import csv
 import datetime
+import json
 
 from .models import Drug, Batch, Supplier, StockTransaction, Alert, CustomUser, Location, StockTransfer
 from .forms import (
@@ -1311,99 +1312,245 @@ def transfer_list(request):
 def transfer_create(request):
     """Direct push transfer of existing stock to another location."""
     active_location = get_active_location(request)
+    
+    # Query drugs and batches to pass to Alpine.js
+    active_batches = Batch.objects.filter(location=active_location, quantity_remaining__gt=0).select_related('drug')
+    drugs_with_stock = Drug.objects.filter(batches__in=active_batches).distinct().order_by('drug_name')
+    
+    drugs_list = [{'id': d.id, 'name': d.drug_name} for d in drugs_with_stock]
+    batches_list = [
+        {
+            'id': b.id,
+            'batch_number': b.batch_number,
+            'quantity_remaining': b.quantity_remaining,
+            'drug_id': b.drug.id,
+            'expiry_date': b.expiry_date.strftime('%Y-%m-%d') if b.expiry_date else 'No Expiry'
+        }
+        for b in active_batches
+    ]
+    
+    initial_items = []
+    
     if request.method == 'POST':
         form = StockTransferForm(request.POST, location=active_location)
+        items_json = request.POST.get('items_json', '[]')
+        try:
+            items = json.loads(items_json)
+        except json.JSONDecodeError:
+            items = []
+        
+        initial_items = items
+        
         if form.is_valid():
             to_location = form.cleaned_data['to_location']
-            drug = form.cleaned_data['drug']
-            batch = form.cleaned_data['batch']
-            quantity = form.cleaned_data['quantity']
             reference = form.cleaned_data['reference']
-
-            # Double-check stock
-            if batch.quantity_remaining < quantity:
-                messages.error(request, f"Insufficient stock in Batch {batch.batch_number}. Available: {batch.quantity_remaining}")
+            
+            errors = []
+            if not items:
+                errors.append("Please add at least one stock transfer item.")
+                
+            validated_items = []
+            seen_batches = set()
+            for idx, item in enumerate(items, start=1):
+                drug_id = item.get('drug_id')
+                batch_id = item.get('batch_id')
+                qty = item.get('quantity')
+                
+                if not drug_id:
+                    errors.append(f"Row {idx}: Please select a drug.")
+                    continue
+                if not batch_id:
+                    errors.append(f"Row {idx}: Please select a batch.")
+                    continue
+                try:
+                    qty = int(qty)
+                    if qty <= 0:
+                        errors.append(f"Row {idx}: Quantity must be greater than 0.")
+                        continue
+                except (ValueError, TypeError):
+                    errors.append(f"Row {idx}: Invalid quantity.")
+                    continue
+                    
+                # Check for duplicate batch selection
+                try:
+                    batch_id = int(batch_id)
+                except (ValueError, TypeError):
+                    errors.append(f"Row {idx}: Invalid batch selection.")
+                    continue
+                    
+                if batch_id in seen_batches:
+                    errors.append(f"Row {idx}: Duplicate batch selected. Please combine quantities into a single row.")
+                    continue
+                seen_batches.add(batch_id)
+                
+                # Verify batch and quantity
+                try:
+                    batch = Batch.objects.get(id=batch_id, location=active_location)
+                    if batch.quantity_remaining < qty:
+                        errors.append(f"Row {idx}: Insufficient stock in Batch {batch.batch_number}. Available: {batch.quantity_remaining}, Requested: {qty}")
+                    else:
+                        validated_items.append((batch.drug, batch, qty))
+                except Batch.DoesNotExist:
+                    errors.append(f"Row {idx}: Selected batch does not exist or does not belong to your active location.")
+            
+            if errors:
+                for err in errors:
+                    messages.error(request, err)
             else:
                 with transaction.atomic():
-                    # Deduct stock immediately
-                    batch.quantity_remaining -= quantity
-                    batch.save()
-
-                    # Create transaction log
-                    StockTransaction.objects.create(
-                        batch=batch,
-                        transaction_type='OUT',
-                        quantity=quantity,
-                        user=request.user,
-                        location=active_location,
-                        reference=f"Transfer in transit to {to_location.name} (Ref: {reference})"
-                    )
-
-                    # Create StockTransfer record
-                    StockTransfer.objects.create(
-                        transfer_type='TRANSFER',
-                        status='PENDING_RECEIPT',
-                        from_location=active_location,
-                        to_location=to_location,
-                        drug=drug,
-                        batch_number=batch.batch_number,
-                        manufacturing_date=batch.manufacturing_date,
-                        expiry_date=batch.expiry_date,
-                        supplier=batch.supplier,
-                        quantity=quantity,
-                        created_by=request.user,
-                        reference=reference
-                    )
+                    for drug, batch, qty in validated_items:
+                        # Deduct stock immediately
+                        batch.quantity_remaining -= qty
+                        batch.save()
+                        
+                        # Create transaction log
+                        StockTransaction.objects.create(
+                            batch=batch,
+                            transaction_type='OUT',
+                            quantity=qty,
+                            user=request.user,
+                            location=active_location,
+                            reference=f"Transfer in transit to {to_location.name} (Ref: {reference})"
+                        )
+                        
+                        # Create StockTransfer record
+                        StockTransfer.objects.create(
+                            transfer_type='TRANSFER',
+                            status='PENDING_RECEIPT',
+                            from_location=active_location,
+                            to_location=to_location,
+                            drug=drug,
+                            batch_number=batch.batch_number,
+                            manufacturing_date=batch.manufacturing_date,
+                            expiry_date=batch.expiry_date,
+                            supplier=batch.supplier,
+                            quantity=qty,
+                            created_by=request.user,
+                            reference=reference
+                        )
                 check_and_create_alerts()
-                messages.success(request, f"Successfully dispatched {quantity} units of {drug.drug_name} to {to_location.name}. Pending acceptance.")
+                messages.success(request, f"Successfully dispatched {len(validated_items)} items to {to_location.name}. Pending acceptance.")
                 return redirect('transfer_list')
     else:
         form = StockTransferForm(location=active_location)
+        
     return render(request, 'inventory/transfers/form_transfer.html', {
         'form': form,
         'active_location': active_location,
-        'title': 'New Push Stock Transfer'
+        'title': 'New Push Stock Transfer',
+        'drugs_json': json.dumps(drugs_list),
+        'batches_json': json.dumps(batches_list),
+        'initial_items_json': json.dumps(initial_items)
     })
 
 @login_required
 def request_create(request):
     """Pull request of stock from another location."""
     active_location = get_active_location(request)
+    
+    # Query all drugs in the catalog
+    drugs = Drug.objects.all().order_by('drug_name')
+    drugs_list = [{'id': d.id, 'name': d.drug_name} for d in drugs]
+    
+    initial_items = []
+    
+    # Handle pre-population if requested from drug details page
+    from_loc_id = request.GET.get('from_location_id')
+    drug_id = request.GET.get('drug_id')
+    if drug_id:
+        try:
+            # Verify drug exists
+            drug = Drug.objects.get(id=drug_id)
+            initial_items.append({'drug_id': int(drug_id), 'quantity': 1})
+        except (Drug.DoesNotExist, ValueError):
+            pass
+            
     if request.method == 'POST':
         form = StockRequestForm(request.POST, location=active_location)
+        items_json = request.POST.get('items_json', '[]')
+        try:
+            items = json.loads(items_json)
+        except json.JSONDecodeError:
+            items = []
+            
+        initial_items = items
+        
         if form.is_valid():
             from_location = form.cleaned_data['from_location']
-            drug = form.cleaned_data['drug']
-            quantity = form.cleaned_data['quantity']
             reference = form.cleaned_data['reference']
-
-            # Create StockTransfer record (REQUEST type)
-            StockTransfer.objects.create(
-                transfer_type='REQUEST',
-                status='PENDING_APPROVAL',
-                from_location=from_location,
-                to_location=active_location,
-                drug=drug,
-                quantity=quantity,
-                created_by=request.user,
-                reference=reference
-            )
-            messages.success(request, f"Requested {quantity} units of {drug.drug_name} from {from_location.name}. Pending approval.")
-            return redirect('transfer_list')
+            
+            errors = []
+            if not items:
+                errors.append("Please add at least one drug request item.")
+                
+            validated_items = []
+            seen_drugs = set()
+            for idx, item in enumerate(items, start=1):
+                d_id = item.get('drug_id')
+                qty = item.get('quantity')
+                
+                if not d_id:
+                    errors.append(f"Row {idx}: Please select a drug.")
+                    continue
+                try:
+                    qty = int(qty)
+                    if qty <= 0:
+                        errors.append(f"Row {idx}: Quantity must be greater than 0.")
+                        continue
+                except (ValueError, TypeError):
+                    errors.append(f"Row {idx}: Invalid quantity.")
+                    continue
+                    
+                try:
+                    d_id = int(d_id)
+                except (ValueError, TypeError):
+                    errors.append(f"Row {idx}: Invalid drug selection.")
+                    continue
+                    
+                if d_id in seen_drugs:
+                    errors.append(f"Row {idx}: Duplicate drug selected. Please combine quantities into a single row.")
+                    continue
+                seen_drugs.add(d_id)
+                
+                try:
+                    drug = Drug.objects.get(id=d_id)
+                    validated_items.append((drug, qty))
+                except Drug.DoesNotExist:
+                    errors.append(f"Row {idx}: Selected drug does not exist.")
+            
+            if errors:
+                for err in errors:
+                    messages.error(request, err)
+            else:
+                with transaction.atomic():
+                    for drug, qty in validated_items:
+                        StockTransfer.objects.create(
+                            transfer_type='REQUEST',
+                            status='PENDING_APPROVAL',
+                            from_location=from_location,
+                            to_location=active_location,
+                            drug=drug,
+                            quantity=qty,
+                            created_by=request.user,
+                            reference=reference
+                        )
+                messages.success(request, f"Requested {len(validated_items)} drugs from {from_location.name}. Pending approval.")
+                return redirect('transfer_list')
     else:
-        # Pre-populate if requested from drug details page
         initial = {}
-        from_loc_id = request.GET.get('from_location_id')
-        drug_id = request.GET.get('drug_id')
         if from_loc_id:
-            initial['from_location'] = get_object_or_404(Location, id=from_loc_id)
-        if drug_id:
-            initial['drug'] = get_object_or_404(Drug, id=drug_id)
+            try:
+                initial['from_location'] = get_object_or_404(Location, id=from_loc_id)
+            except Exception:
+                pass
         form = StockRequestForm(initial=initial, location=active_location)
+        
     return render(request, 'inventory/transfers/form_request.html', {
         'form': form,
         'active_location': active_location,
-        'title': 'Request Stock (Pull)'
+        'title': 'Request Stock (Pull)',
+        'drugs_json': json.dumps(drugs_list),
+        'initial_items_json': json.dumps(initial_items)
     })
 
 @login_required
