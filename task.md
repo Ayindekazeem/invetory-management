@@ -5,7 +5,32 @@
 - `[x]` Configure settings.py (MySQL database configuration, Custom User model, static files)
 - `[x]` Define Database Models (CustomUser, Supplier, Drug, Batch, StockTransaction, Alert)
 - `[x]` Implement utility functions (FIFO queue processing, alert calculation) in `utils.py`
-- `[x]` Create Forms in `forms.py` with Tailwind styling classes
+- `[x]` Update form classes in `forms.py` (remove drug, batch, quantity fields from `StockTransferForm` and `StockRequestForm`)
+- `[x]` Create HTML Templates with premium dark slate / teal design:
+  - `[x]` Base layout with responsive sidebar and Alpine.js (`base.html`)
+  - `[x]` Login/Profile templates (`login.html`, `profile.html`)
+  - `[x]` Dashboard with KPI cards and status indicators (`dashboard.html`)
+  - `[x]` Drug Directory and Add/Edit forms
+  - `[x]` Supplier Directory and Add/Edit forms
+  - `[x]` Batch Directory (Stock-In) and Add/Edit forms
+  - `[x]` Transaction Log and Stock-Out form (with FIFO / Batch selection)
+  - `[x]` Alerts Center (filtering by status/type)
+  - `[x]` Reports Dashboard (with CSV export capability)
+- `[x]` Define Views and URL patterns
+- `[x]` Create sample data seed script (Django command)
+- `[x]` Run migrations and verify locally
+- `[x]` **User Management Module**
+- `[x]` **Dark/Light Mode Theme Support**
+- `[x]` **Branding Favicon Support**
+- `[x]` **Bulk Drug Upload (Excel/CSV)**:
+# Tasks
+
+- `[x]` Setup Python Virtual Environment and Install Dependencies (`django`, `pymysql`, `cryptography`)
+- `[x]` Create Django project (`inventory_project`) and application (`inventory`)
+- `[x]` Configure settings.py (MySQL database configuration, Custom User model, static files)
+- `[x]` Define Database Models (CustomUser, Supplier, Drug, Batch, StockTransaction, Alert)
+- `[x]` Implement utility functions (FIFO queue processing, alert calculation) in `utils.py`
+- `[x]` Update form classes in `forms.py` (remove drug, batch, quantity fields from `StockTransferForm` and `StockRequestForm`)
 - `[x]` Create HTML Templates with premium dark slate / teal design:
   - `[x]` Base layout with responsive sidebar and Alpine.js (`base.html`)
   - `[x]` Login/Profile templates (`login.html`, `profile.html`)
@@ -25,7 +50,7 @@
 - `[x]` **Bulk Drug Upload (Excel/CSV)**:
   - `[x]` Install `openpyxl` library in virtual environment
   - `[x]` Add `BulkUploadForm` in `forms.py`
-  - `[x]` Implement template download and parsing views in `views.py`
+  - `[x]` Rebuild `form_transfer.html` template using Alpine.js for dynamic row and batch filtering in the browser.py`
   - `[x]` Configure routes in `urls.py`
   - `[x]` Add link/button to `drugs/list.html`
   - `[x]` Create `drugs/bulk_upload.html` form and feedback layout

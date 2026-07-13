@@ -233,9 +233,6 @@ class LocationForm(TailwindFormMixin, forms.ModelForm):
 
 class StockTransferForm(TailwindFormMixin, forms.Form):
     to_location = forms.ModelChoiceField(queryset=Location.objects.none(), empty_label="Select Destination Store")
-    drug = forms.ModelChoiceField(queryset=Drug.objects.all(), empty_label="Select Drug")
-    batch = forms.ModelChoiceField(queryset=Batch.objects.none(), empty_label="Select Batch (Choose drug first)")
-    quantity = forms.IntegerField(min_value=1, widget=forms.NumberInput(attrs={'placeholder': 'Quantity to transfer'}))
     reference = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'placeholder': 'e.g. Ref/Notes'}))
 
     def __init__(self, *args, **kwargs):
@@ -243,25 +240,10 @@ class StockTransferForm(TailwindFormMixin, forms.Form):
         super().__init__(*args, **kwargs)
         if self.location:
             self.fields['to_location'].queryset = Location.objects.exclude(id=self.location.id).order_by('name')
-            
-            batch_qs = Batch.objects.filter(location=self.location, quantity_remaining__gt=0)
-            if 'drug' in self.data:
-                try:
-                    drug_id = int(self.data.get('drug'))
-                    self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
-                except (ValueError, TypeError):
-                    pass
-            elif self.initial.get('drug'):
-                drug_id = self.initial.get('drug').id
-                self.fields['batch'].queryset = batch_qs.filter(drug_id=drug_id).order_by('expiry_date')
-            else:
-                self.fields['batch'].queryset = batch_qs.order_by('expiry_date')
 
 
 class StockRequestForm(TailwindFormMixin, forms.Form):
     from_location = forms.ModelChoiceField(queryset=Location.objects.none(), empty_label="Select Supplying Store")
-    drug = forms.ModelChoiceField(queryset=Drug.objects.all(), empty_label="Select Drug")
-    quantity = forms.IntegerField(min_value=1, widget=forms.NumberInput(attrs={'placeholder': 'Quantity to request'}))
     reference = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'placeholder': 'Reason/Notes'}))
 
     def __init__(self, *args, **kwargs):
@@ -269,5 +251,6 @@ class StockRequestForm(TailwindFormMixin, forms.Form):
         super().__init__(*args, **kwargs)
         if self.location:
             self.fields['from_location'].queryset = Location.objects.exclude(id=self.location.id).order_by('name')
+
 
 
